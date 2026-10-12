@@ -14,7 +14,7 @@
   "use strict";
 
   const REC = (win.REC = win.REC || {});
-  REC.build = "2026-10-09.5";
+  REC.build = "2026-10-11.1";
 
   // Injected at build time via Vercel env (optional).
   // Falls back to values edited in this file for local dev.
@@ -890,6 +890,22 @@
   const AUTH_KEY = "rec_user";
   const SESSION_KEY = "rec_session";
 
+  /* Staff roles that may open the admin panel. Real access is still enforced
+     by Supabase RLS + public.has_permission(); these lists only drive the UI
+     (which pages/links to show). Keep in sync with
+     supabase/update-role-manager-seller.sql. */
+  const STAFF_ROLES = ["owner", "administrator", "admin", "manager", "seller"];
+  const FULL_ROLES = ["owner", "administrator", "admin"];
+  const PERMISSIONS = {
+    manager: [
+      "orders", "payments", "delivery", "customers",
+      "products", "categories", "inventory", "batches",
+      "testimonials", "reviews", "blog", "messages",
+      "reports", "audit", "assignments", "stock_requests", "staff_view", "profile",
+    ],
+    seller: ["my_orders", "sales", "stock_requests", "inventory_view", "product_view", "profile"],
+  };
+
   REC.auth = {
     get supabase() {
       return REC.supabaseClient;
@@ -942,7 +958,7 @@
     async getProfile(userId) {
       const { data, error } = await REC.supabaseClient
         .from("profiles")
-        .select("id, full_name, phone, avatar_url, role, created_at")
+        .select("id, full_name, phone, avatar_url, role, active, suspended_at, created_at")
         .eq("id", userId)
         .maybeSingle();
       if (error) throw error;
@@ -969,7 +985,33 @@
 
     isAdmin() {
       const cur = REC.auth.currentUser();
-      return !!(cur && cur.profile && cur.profile.role === "admin");
+      return !!(cur && cur.profile && FULL_ROLES.indexOf(cur.profile.role) !== -1);
+    },
+
+    /** Any staff role (full admin or a specialist manager). */
+    isStaff() {
+      return !!REC.auth.currentUser() && REC.auth.isStaffProfile(REC.auth.currentUser().profile);
+    },
+
+    isStaffProfile(profile) {
+      return !!(profile && STAFF_ROLES.indexOf(profile.role) !== -1);
+    },
+
+    isSuspended(profile) {
+      return !!(profile && profile.active === false);
+    },
+
+    role() {
+      const cur = REC.auth.currentUser();
+      return (cur && cur.profile && cur.profile.role) || null;
+    },
+
+    /** UX-level module permission check. The database is the real authority. */
+    hasPermission(permission) {
+      const r = REC.auth.role();
+      if (!r) return false;
+      if (FULL_ROLES.indexOf(r) !== -1) return true;
+      return (PERMISSIONS[r] || []).indexOf(permission) !== -1;
     },
 
     async refreshProfile() {
@@ -1262,7 +1304,7 @@
         '<span class="ci-price">' + total + "</span>" +
         '<div class="qty-stepper" data-qty-for="' + esc(i.product_id) + '">' +
         '<button type="button" data-dec="' + esc(i.product_id) + '" aria-label="Decrease quantity">&minus;</button>' +
-        '<input type="number" min="1" value="' + i.quantity + '" data-qty="' + esc(i.product_id) + '" aria-label="Quantity"/>' +
+        '<input type="number" min="1" name="quantity" value="' + i.quantity + '" data-qty="' + esc(i.product_id) + '" aria-label="Quantity"/>' +
         '<button type="button" data-inc="' + esc(i.product_id) + '" aria-label="Increase quantity">+</button>' +
         "</div>" +
         '<button type="button" class="ci-remove" data-remove="' + esc(i.product_id) + '">' + icon("i-trash") + "Remove</button>" +
@@ -3967,7 +4009,7 @@ const isPickup = order.fulfillment_method === "pickup";
     let reference = ref || (order && order.order_number) || null;
 
     const refEl = $("order_ref");
-    if (reference) refEl.textContent = reference;
+    if (reference && refEl) refEl.textContent = reference;
 
     const wa = $("order_wa");
     if (wa) {
@@ -3999,20 +4041,51 @@ const isPickup = order.fulfillment_method === "pickup";
   const UI = REC.ui;
 
 const NAV = [
-    { key: "dashboard", label: "Dashboard", icon: "i-grid", href: REC.admin("index.html") },
-    { key: "orders", label: "Orders", icon: "i-clipboard", href: REC.admin("orders.html"), count: true },
-    { key: "products", label: "Products", icon: "i-box", href: REC.admin("products.html") },
-    { key: "categories", label: "Categories", icon: "i-layers", href: REC.admin("categories.html") },
-    { key: "inventory", label: "Inventory", icon: "i-database", href: REC.admin("inventory.html") },
-    { key: "customers", label: "Customers", icon: "i-users", href: REC.admin("customers.html") },
-    { key: "delivery", label: "Delivery", icon: "i-truck", href: REC.admin("delivery.html") },
-    { key: "pickups", label: "Pickups", icon: "i-map-pin", href: REC.admin("pickups.html") },
-    { key: "testimonials", label: "Testimonials", icon: "i-quote", href: REC.admin("testimonials.html") },
-    { key: "reviews", label: "Reviews", icon: "i-star", href: REC.admin("reviews.html"), count: true },
-    { key: "blog", label: "Blog", icon: "i-file", href: REC.admin("blog.html") },
-    { key: "messages", label: "Messages", icon: "i-message", href: REC.admin("messages.html"), count: true },
-    { key: "settings", label: "Settings", icon: "i-settings", href: REC.admin("settings.html") },
+    { key: "dashboard", label: "Dashboard", icon: "i-grid", href: REC.admin("index.html"), group: "Main" },
+    { key: "orders", label: "Orders", icon: "i-clipboard", href: REC.admin("orders.html"), count: true, group: "Main", perm: "orders" },
+    { key: "my_orders", label: "My Orders", icon: "i-clipboard", href: REC.admin("orders.html"), count: true, group: "Main", perm: "my_orders" },
+    { key: "catalogue", label: "Product Catalogue", icon: "i-box", href: REC.admin("products.html"), group: "Main", perm: "product_view" },
+    { key: "my_sales", label: "My Sales", icon: "i-money", href: REC.admin("sales.html"), group: "Main", perm: "sales" },
+    { key: "followups", label: "Customer Follow-ups", icon: "i-message", href: REC.admin("messages.html"), count: true, group: "Main", perm: "sales" },
+    { key: "products", label: "Products", icon: "i-box", href: REC.admin("products.html"), group: "Catalogs", perm: "products" },
+    { key: "categories", label: "Categories", icon: "i-layers", href: REC.admin("categories.html"), group: "Catalogs", perm: "categories" },
+    { key: "inventory", label: "Inventory", icon: "i-database", href: REC.admin("inventory.html"), group: "Catalogs", perm: "inventory" },
+    { key: "customers", label: "Customers", icon: "i-users", href: REC.admin("customers.html"), group: "Catalogs", perm: "customers" },
+    { key: "delivery", label: "Delivery", icon: "i-truck", href: REC.admin("delivery.html"), group: "Operations", perm: "delivery" },
+    { key: "pickups", label: "Pickups", icon: "i-map-pin", href: REC.admin("pickups.html"), group: "Operations", perm: "delivery" },
+    { key: "assignments", label: "Seller Assignments", icon: "i-users", href: REC.admin("assignments.html"), group: "Operations", perm: "assignments" },
+    { key: "stock_requests", label: "Stock Requests", icon: "i-package", href: REC.admin("stock_requests.html"), count: true, group: "Operations", perm: "stock_requests" },
+    { key: "testimonials", label: "Testimonials", icon: "i-quote", href: REC.admin("testimonials.html"), group: "Content", perm: "testimonials" },
+    { key: "reviews", label: "Reviews", icon: "i-star", href: REC.admin("reviews.html"), count: true, group: "Content", perm: "reviews" },
+    { key: "blog", label: "Blog", icon: "i-file", href: REC.admin("blog.html"), group: "Content", perm: "blog" },
+    { key: "messages", label: "Messages", icon: "i-message", href: REC.admin("messages.html"), count: true, group: "Content", perm: "messages" },
+    { key: "sales", label: "Sales Reports", icon: "i-chart", href: REC.admin("sales.html"), group: "Reports", perm: "reports" },
+    { key: "staff", label: "Staff", icon: "i-shield", href: REC.admin("staff.html"), group: "System", perm: "staff_view" },
+    { key: "activity", label: "Activity Logs", icon: "i-clock", href: REC.admin("activity.html"), group: "System", perm: "audit" },
+    { key: "profile", label: "Profile & Password", icon: "i-user", href: REC.admin("profile.html"), group: "System", perm: "profile" },
+    { key: "settings", label: "Settings", icon: "i-settings", href: REC.admin("settings.html"), group: "System", perm: "settings" },
   ];
+
+  /* Per-role navigation (owner/administrator/admin get the full panel;
+     manager gets operations + content; seller gets assigned-work views). */
+  const ROLE_NAV = {
+    full: [
+      "dashboard", "orders", "products", "categories", "inventory", "customers",
+      "delivery", "pickups", "assignments", "stock_requests",
+      "testimonials", "reviews", "blog", "messages", "sales",
+      "staff", "activity", "profile", "settings",
+    ],
+    manager: [
+      "dashboard", "orders", "products", "categories", "inventory", "customers",
+      "assignments", "stock_requests", "testimonials", "reviews", "blog", "messages",
+      "sales", "activity", "staff", "profile",
+    ],
+    seller: [
+      "dashboard", "my_orders", "catalogue", "my_sales", "followups", "stock_requests", "profile",
+    ],
+  };
+
+  const NAV_GROUPS = ["Main", "Catalogs", "Operations", "Content", "Reports", "System"];
 
   const ADMIN = (win.RECAdmin = win.RECAdmin || {});
 
@@ -4028,51 +4101,103 @@ const NAV = [
       return false;
     }
     const client = REC.supabaseClient;
+    const cached = REC.auth.currentUser();
     const goLogin = (reason) => {
       location.href = REC.admin("login.html") + (reason ? "?reason=" + encodeURIComponent(reason) : "");
     };
-    try {
-      // Prefer a server-validated user: getUser() refreshes an expired access
-      // token instead of letting a query 401 and bouncing to the login page.
-      let user = null;
+
+    /* Is the browser session authenticated? getUser() validates with the
+       server (and refreshes an expired access token); getSession() is the
+       offline fallback so a flaky network does not log a valid admin out. */
+    const readUser = async () => {
       try {
         const { data, error } = await client.auth.getUser();
-        if (!error && data && data.user) user = data.user;
+        if (!error && data && data.user) return data.user;
       } catch (e) {}
-      if (!user) {
+      try {
         const { data } = await client.auth.getSession();
-        user = data && data.session && data.session.user;
+        return (data && data.session && data.session.user) || null;
+      } catch (e) {}
+      return null;
+    };
+
+    /* One retry covers a transient network/RLS blip right after login. */
+    const readProfile = async (userId) => {
+      let lastError = null;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const profile = await REC.auth.getProfile(userId);
+          if (profile) return { profile, error: null };
+        } catch (e) {
+          lastError = e;
+        }
+        if (attempt === 0) await new Promise((r) => setTimeout(r, 400));
       }
+      return { profile: null, error: lastError };
+    };
+
+    try {
+      const user = await readUser();
       if (!user) {
         goLogin("no-session");
         return false;
       }
-      let profile = null;
-      try {
-        profile = await REC.auth.getProfile(user.id);
-      } catch (e) {
-        profile = null;
-      }
-      if (!profile) {
-        // One retry — covers a transient network/RLS blip right after login.
-        await new Promise((r) => setTimeout(r, 400));
-        profile = await REC.auth.getProfile(user.id);
-      }
-      if (!profile) {
-        goLogin("no-profile");
+
+      const result = await readProfile(user.id);
+
+      if (!result.profile) {
+        /* The account IS authenticated, so an unreadable/missing profile is
+           almost always transient or a missing row — not a reason to bounce
+           back to login in a loop. Reuse a previously cached admin profile
+           (RLS still enforces real authorization) or, failing that, show an
+           actionable error instead of redirecting. */
+        if (REC.auth.isStaffProfile(cached && cached.profile)) {
+          REC.auth.cacheUser(user, cached.profile);
+          return true;
+        }
+        showGuardError(
+          result.error
+            ? "We could not read your admin profile: " + (result.error.message || result.error)
+            : "No admin profile was found for this account."
+        );
         return false;
       }
-      if (profile.role !== "admin") {
+
+      if (!REC.auth.isStaffProfile(result.profile)) {
         goLogin("not-admin");
         return false;
       }
-      REC.auth.cacheUser(user, profile);
+
+      if (REC.auth.isSuspended(result.profile)) {
+        await REC.auth.signOut();
+        goLogin("account-suspended");
+        return false;
+      }
+
+      REC.auth.cacheUser(user, result.profile);
       return true;
     } catch (e) {
       goLogin("error:" + ((e && e.message) || String(e)));
       return false;
     }
   };
+
+  /* Shown when the guard cannot confirm admin access even though the account
+     is signed in — avoids an automatic redirect loop and states the reason. */
+  function showGuardError(message) {
+    const shell = document.getElementById("admin-shell");
+    if (!shell) return;
+    shell.innerHTML =
+      '<div class="admin-login-wrap"><div class="admin-login-card">' +
+      "<h1>Admin access problem</h1>" +
+      '<p class="sub">' + UI.esc(message) + "</p>" +
+      '<button type="button" class="btn btn-primary btn-block" id="guard_retry">Try again</button>' +
+      '<a class="btn btn-outline btn-block" style="margin-top:.6rem" href="' +
+      REC.admin("login.html") + '">Sign in again</a>' +
+      "</div></div>";
+    const retry = document.getElementById("guard_retry");
+    if (retry) retry.addEventListener("click", () => location.reload());
+  }
 
   function showSetupNotice() {
     const main = document.getElementById("admin-main") || document.getElementById("admin-shell");
@@ -4090,7 +4215,7 @@ const NAV = [
     const shell = document.getElementById("admin-shell");
     if (!shell) return;
 
-    let items = NAV.map((n) => {
+    const renderItem = (n) => {
       const badge = n.count ? '<span class="nav-count" id="nav-count-' + n.key + '"></span>' : "";
       const activeCls = n.key === activeKey ? ' class="active"' : "";
       return (
@@ -4106,11 +4231,34 @@ const NAV = [
         badge +
         "</a>"
       );
+    };
+
+    /* Only show sections the signed-in role is allowed to use. Full admins see
+       the entire panel; managers/sellers see their own restricted nav. The DB
+       still enforces the real authorization. */
+    const role = REC.auth.role();
+    const roleKeys = REC.auth.isAdmin() ? ROLE_NAV.full : ROLE_NAV[role] || ROLE_NAV.full;
+    const visible = NAV.filter(
+      (n) => roleKeys.indexOf(n.key) !== -1 && (!n.perm || REC.auth.hasPermission(n.perm))
+    );
+    let navHtml = "";
+    NAV_GROUPS.forEach((g) => {
+      const group = visible.filter((n) => n.group === g);
+      if (!group.length) return;
+      navHtml += '<span class="nav-label">' + g + "</span>" + group.map(renderItem).join("");
     });
 
     const user = REC.auth.currentUser();
     const name = user && user.profile ? user.profile.full_name : userLabel || "";
     const initials = UI.initials(name) || "R";
+    const roleLabel =
+      {
+        owner: "Owner",
+        administrator: "Administrator",
+        admin: "Administrator",
+        manager: "Manager",
+        seller: "Seller",
+      }[REC.auth.role()] || "Staff";
 
     shell.innerHTML =
       '<aside class="admin-sidebar" id="admin-sidebar">' +
@@ -4119,17 +4267,12 @@ const NAV = [
       "<div><b>REC Admin</b><span>Dashboard</span></div>" +
       "</div>" +
       '<nav class="admin-nav" aria-label="Admin">' +
-      '<span class="nav-label">Main</span>' +
-      items.slice(0, 2).join("") +
-      '<span class="nav-label">Catalogs</span>' +
-      items.slice(2, 6).join("") +
-      '<span class="nav-label">Content</span>' +
-      items.slice(6).join("") +
+      navHtml +
       "</nav>" +
       '<div class="as-foot">' +
       '<div class="as-user">' +
       '<span class="avatar">' + initials + "</span>" +
-      "<div><b>" + UI.esc(name) + "</b><small>Administrator</small></div>" +
+      "<div><b>" + UI.esc(name) + "</b><small>" + roleLabel + "</small></div>" +
       "</div>" +
       '<a href="#" class="admin-nav-a" data-logout style="display:flex;align-items:center;gap:.6rem;font-size:.86rem;font-weight:700;color:#d7e6da">' +
       '<svg aria-hidden="true" style="width:18px;height:18px"><use href="../assets/icons/sprite.svg#i-logout"></use></svg> Sign Out</a>' +
@@ -4147,29 +4290,35 @@ const NAV = [
       '<div id="admin-content"></div>' +
       "</div>";
 
-document.querySelector("[data-logout]").addEventListener("click", async (e) => {
-      e.preventDefault();
-      await REC.auth.signOut();
-      location.href = REC.admin("login.html");
-    });
+    const logoutBtn = document.querySelector("[data-logout]");
+    if (logoutBtn) {
+      logoutBtn.addEventListener("click", async (e) => {
+        e.preventDefault();
+        await REC.auth.signOut();
+        location.href = REC.admin("login.html");
+      });
+    }
 
     const toggle = document.getElementById("mb-toggle");
     const sidebar = document.getElementById("admin-sidebar");
     const backdrop = document.getElementById("admin-backdrop");
-    if (toggle) {
+    if (toggle && sidebar) {
       toggle.addEventListener("click", () => {
         sidebar.classList.toggle("open");
         if (backdrop) backdrop.classList.toggle("show", sidebar.classList.contains("open"));
       });
-      backdrop.addEventListener("click", () => {
-        sidebar.classList.remove("open");
-        backdrop.classList.remove("show");
-      });
+      if (backdrop) {
+        backdrop.addEventListener("click", () => {
+          sidebar.classList.remove("open");
+          backdrop.classList.remove("show");
+        });
+      }
     }
   };
 
   ADMIN.setState = function () {
-    document.getElementById("page-title").textContent = document.title.replace("| REC Admin", "").trim();
+    const el = document.getElementById("page-title");
+    if (el) el.textContent = document.title.replace("| REC Admin", "").trim();
   };
 
   /* Registers a page controller under its key. Without the key step,
@@ -4216,6 +4365,13 @@ document.querySelector("[data-logout]").addEventListener("click", async (e) => {
   ADMIN.emptyState = UI.emptyState;
   ADMIN.icon = UI.icon;
   ADMIN.esc = UI.esc;
+  ADMIN.ROLE_LABEL = {
+    owner: "Owner",
+    administrator: "Administrator",
+    admin: "Administrator",
+    manager: "Manager",
+    seller: "Seller",
+  };
 
   function showAdminError(msg) {
     if (!document.body || !document.body.classList.contains("admin-body")) return;
@@ -4300,6 +4456,7 @@ document.querySelector("[data-logout]").addEventListener("click", async (e) => {
             "no-session": "Your admin session ended. Please sign in again.",
             "no-profile": "We could not read your admin profile. Please sign in again.",
             "not-admin": "This signed-in account does not have admin access.",
+            "account-suspended": "This account has been suspended. Contact the owner to restore access.",
           };
           note.style.display = "block";
           note.textContent = reasons[reason] || "Please sign in again (" + reason + ").";
@@ -4318,7 +4475,7 @@ document.querySelector("[data-logout]").addEventListener("click", async (e) => {
             document.getElementById("al_password").value
           );
           const cur = REC.auth.currentUser();
-          if (!cur || !cur.profile || cur.profile.role !== "admin") {
+          if (!cur || !cur.profile || !REC.auth.isStaffProfile(cur.profile)) {
             await REC.auth.signOut();
             throw new Error("This account does not have admin access.");
           }
@@ -4345,6 +4502,8 @@ UI.toast("Welcome back, " + (cur.profile.full_name || "Admin") + "!", "success")
   const sb = () => REC.supabaseClient;
 
   const AdminPage = {
+    state: { range: "30d", from: "", to: "" },
+
     async init() {
       document.title = "Dashboard | REC Admin";
       ADMIN.setState();
@@ -4356,71 +4515,257 @@ UI.toast("Welcome back, " + (cur.profile.full_name || "Admin") + "!", "success")
         return;
       }
 
+      /* Sellers get a tailored "My Work" dashboard; managers/admins keep the
+         full analytics board. The DB enforces what each role can actually see. */
+      if (REC.auth.role() === "seller") return AdminPage.renderSeller(content);
+
       content.innerHTML =
+        AdminPage.rangeBar() +
         '<div class="stat-grid" id="stat_grid">' +
-        Array.from({ length: 6 }, () =>
+        Array.from({ length: 12 }, () =>
           '<div class="stat-card"><div class="skeleton" style="height:14px;width:50%"></div><div class="skeleton" style="height:26px;width:60%;margin-top:8px"></div></div>'
         ).join("") +
         "</div>" +
         '<div class="chart-grid">' +
-        '<div class="admin-panel"><div class="ap-head"><h3>Revenue (last 7 days)</h3></div><div class="ap-body chart-box" id="revenue_chart"><div class="skeleton" style="height:180px"></div></div></div>' +
-        '<div class="admin-panel"><div class="ap-head"><h3>Order Status</h3></div><div class="ap-body chart-box" id="status_chart"><div class="skeleton" style="height:180px"></div></div></div>' +
+        '<div class="admin-panel"><div class="ap-head"><h3>Sales over time</h3></div><div class="ap-body chart-box" id="revenue_chart"><div class="skeleton" style="height:180px"></div></div></div>' +
+        '<div class="admin-panel"><div class="ap-head"><h3>Order status breakdown</h3></div><div class="ap-body chart-box" id="status_chart"><div class="skeleton" style="height:180px"></div></div></div>' +
         "</div>" +
         '<div class="chart-grid">' +
-        '<div class="admin-panel"><div class="ap-head"><h3>Recent Orders</h3></div><div class="ap-body" id="recent_orders"><div class="skeleton" style="height:120px"></div></div></div>' +
-        '<div class="admin-panel"><div class="ap-head"><h3>Top Products</h3></div><div class="ap-body" id="top_products"><div class="skeleton" style="height:120px"></div></div></div>' +
-        "</div>";
+        '<div class="admin-panel"><div class="ap-head"><h3>Recent orders</h3></div><div class="ap-body" id="recent_orders"><div class="skeleton" style="height:120px"></div></div></div>' +
+        '<div class="admin-panel"><div class="ap-head"><h3>Best-selling products</h3></div><div class="ap-body" id="best_products"><div class="skeleton" style="height:120px"></div></div></div>' +
+        "</div>" +
+        '<div class="chart-grid">' +
+        '<div class="admin-panel"><div class="ap-head"><h3>Low-stock alerts</h3></div><div class="ap-body" id="low_stock"><div class="skeleton" style="height:120px"></div></div></div>' +
+        '<div class="admin-panel"><div class="ap-head"><h3>Latest enquiries</h3></div><div class="ap-body" id="latest_msgs"><div class="skeleton" style="height:120px"></div></div></div>' +
+        "</div>" +
+        '<div class="chart-grid">' +
+        '<div class="admin-panel"><div class="ap-head"><h3>Category performance</h3></div><div class="ap-body" id="cat_perf"><div class="skeleton" style="height:120px"></div></div></div>' +
+        '<div class="admin-panel"><div class="ap-head"><h3>Delivery destinations</h3></div><div class="ap-body" id="dest_summary"><div class="skeleton" style="height:120px"></div></div></div>' +
+        "</div>" +
+        '<div class="admin-panel"><div class="ap-head"><h3>Latest payment activity</h3></div><div class="ap-body" id="latest_payments"><div class="skeleton" style="height:120px"></div></div></div>';
 
       try {
-        const [orders, products, customers, statusAgg] = await Promise.all([
-          sb().from("orders").select("id,order_number,status,total,state,created_at,full_name").order("created_at", { ascending: false }).limit(200),
-          sb().from("products").select("id,name,stock_quantity,price,category_id"),
-          sb().from("customers").select("id").limit(1000),
-          sb().from("orders").select("status"),
+        /* Optional tables may not exist until the migration is applied, so
+           these reads degrade to [] instead of breaking the whole page. */
+        const safe = (q) => Promise.resolve(q).then((r) => (r && r.error ? { data: [] } : r)).catch(() => ({ data: [] }));
+        const [orders, products, categories, customers, items, bulk, visits, msgs] = await Promise.all([
+          sb().from("orders").select("id,order_number,status,payment_status,total,subtotal,delivery_fee,state,full_name,created_at,paid_at,fulfillment_method").order("created_at", { ascending: false }).limit(2000),
+          sb().from("products").select("*"),
+          sb().from("categories").select("id,name,slug"),
+          sb().from("customers").select("id"),
+          safe(sb().from("order_items").select("product_id,name,quantity,unit_price,order_id")),
+          safe(sb().from("bulk_quote_requests").select("id,status")),
+          safe(sb().from("farm_visit_bookings").select("id,status")),
+          safe(sb().from("contact_messages").select("id,name,subject,created_at,status").order("created_at", { ascending: false }).limit(5)),
         ]);
 
-        const ordersArr = orders.data || [];
-        const productsArr = products.data || [];
-        const customersCount = (customers.data || []).length;
-
-        AdminPage.renderStats(ordersArr, productsArr, customersCount, statusAgg.data || []);
-        AdminPage.renderRecent(ordersArr);
-        AdminPage.renderTopProducts(productsArr);
-        AdminPage.renderRevenue(ordersArr);
-        AdminPage.renderStatus(statusAgg.data || []);
+        this.data = {
+          orders: orders.data || [],
+          products: products.data || [],
+          categories: categories.data || [],
+          customersCount: (customers.data || []).length,
+          items: items.data || [],
+          bulk: bulk.data || [],
+          visits: visits.data || [],
+          msgs: msgs.data || [],
+        };
+        this.bindRange();
+        this.paint();
       } catch (err) {
         content.innerHTML = ADMIN.emptyState("Could not load dashboard", err.message || "Check your connection and retry.");
       }
     },
 
-    renderStats(orders, products, customersCount) {
-      const pending = orders.filter((o) => o.status === "pending").length;
+    async renderSeller(content) {
+      const sn = document.getElementById("admin-content") || content;
+
+      const orderStatus = {
+        pending: "gold", confirmed: "green", processing: "gold", ready: "green",
+        "out for delivery": "green", completed: "green", cancelled: "red",
+      };
+
+      const [ordersRes, reqRes, prodRes, invRes] = await Promise.all([
+        sb().from("orders").select("id,order_number,status,payment_status,total,full_name,created_at,fulfillment_method").order("created_at", { ascending: false }),
+        sb().from("stock_requests").select("id,kind,status,created_at").order("created_at", { ascending: false }).limit(25),
+        sb().from("products").select("id,name,stock_quantity,unit,active"),
+        sb().from("inventory").select("product_id,min_stock"),
+      ]);
+
+      const orders = ordersRes.data || [];
+      const requests = reqRes.data || [];
+      const products = prodRes.data || [];
+      const inv = invRes.data || [];
+
+      const paidValue = orders.reduce((s, o) => s + (o.payment_status === "paid" ? Number(o.total || 0) : 0), 0);
+      const assigned = orders.filter((o) => o.status !== "cancelled").length;
+      const pendingRequests = requests.filter((r) => r.status === "pending").length;
+
+      const minMap = {};
+      inv.forEach((i) => { minMap[i.product_id] = i.min_stock; });
+      const low = products
+        .filter((p) => {
+          const qty = p.stock_quantity;
+          return (p.active !== false) && qty != null && qty <= (minMap[p.id] || 5);
+        })
+        .slice(0, 6);
+
+      const stats = [
+        { label: "Assigned Orders", value: orders.length, sub: assigned + " not cancelled" },
+        { label: "Paid Order Value", value: ADMIN.money(paidValue), sub: "Payment received" },
+        { label: "Pending Requests", value: pendingRequests, sub: "Stock/product requests" },
+        { label: "Low-stock Items", value: low.length, warn: low.length > 0 },
+      ];
+
+      sn.innerHTML =
+        '<div class="admin-panel" style="margin-bottom:1rem"><div class="ap-head"><div><h3>Welcome back</h3>' +
+        '<span style="font-size:.82rem;color:var(--muted)">Here is your assigned work and current stock situation at a glance.</span></div>' +
+        '<div style="display:flex;gap:.5rem"><a class="btn btn-sm btn-outline" href="' + REC.admin("orders.html") + '">My Orders</a>' +
+        '<a class="btn btn-sm btn-primary" href="' + REC.admin("stock_requests.html") + '">Request Stock</a></div></div></div>' +
+        '<div class="stat-grid">' +
+        stats.map((s) =>
+          '<div class="stat-card' + (s.warn ? ' warn' : '') + '"><div class="sc-label">' + s.label + "</div><div class=\"sc-value\"" + (s.warn ? ' style="color:var(--danger)"' : "") + ">" + s.value + "</div>" +
+          (s.sub ? '<div class="sc-sub">' + ADMIN.esc(s.sub) + "</div>" : "") + "</div>"
+        ).join("") +
+        "</div>" +
+        '<div class="chart-grid">' +
+        '<div class="admin-panel"><div class="ap-head"><h3>My assigned orders</h3></div><div class="ap-body" id="s_dash_orders"></div></div>' +
+        '<div class="admin-panel"><div class="ap-head"><h3>My stock requests</h3></div><div class="ap-body" id="s_dash_requests"></div></div>' +
+        "</div>" +
+        '<div class="admin-panel"><div class="ap-head"><h3>Low stock alerts</h3></div><div class="ap-body" id="s_dash_low"></div></div>';
+
+      const hostO = document.getElementById("s_dash_orders");
+      hostO.innerHTML = orders.length
+        ? '<div class="table-wrap"><table class="data-table"><thead><tr><th>Order</th><th>Customer</th><th>Value</th><th>Status</th></tr></thead><tbody>' +
+          orders.slice(0, 8).map((o) =>
+            '<tr><td class="t-strong">' + ADMIN.esc(o.order_number) + "</td><td>" + ADMIN.esc(o.full_name) + "</td><td>" + ADMIN.money(o.total) + "</td>" +
+            '<td><span class="badge ' + (orderStatus[o.status] || "gold") + '">' + ADMIN.esc(o.status) + "</span></td></tr>"
+          ).join("") + "</tbody></table></div>"
+        : ADMIN.emptyState("No assigned orders yet", "Orders assigned to you by the manager will appear here.");
+
+      const hostR = document.getElementById("s_dash_requests");
+      hostR.innerHTML = requests.length
+        ? '<div class="rank-list">' + requests.slice(0, 6).map((r) =>
+            '<div class="rank-row"><div class="rank-main"><div class="rank-top"><strong>' + ADMIN.esc(r.kind.replace(/_/g, " ")) + '</strong><span class="badge ' + (r.status === "approved" ? "green" : r.status === "rejected" ? "red" : "gold") + '">' + ADMIN.esc(r.status) + "</span></div>" +
+            '<div class="rank-sub">' + new Date(r.created_at).toLocaleDateString() + "</div></div></div>"
+          ).join("") + "</div>"
+        : ADMIN.emptyState("No requests", "Request stock or a product via Stock Requests.");
+
+      const hostL = document.getElementById("s_dash_low");
+      hostL.innerHTML = low.length
+        ? '<div class="table-wrap"><table class="data-table"><thead><tr><th>Product</th><th>Stock</th><th>Unit</th></tr></thead><tbody>' +
+          low.map((p) =>
+            "<tr><td class=\"t-strong\">" + ADMIN.esc(p.name) + "</td><td>" + (p.stock_quantity != null ? p.stock_quantity : "—") + "</td><td>" + ADMIN.esc(p.unit || "—") + "</td></tr>"
+          ).join("") + "</tbody></table></div>"
+        : ADMIN.emptyState("Stock is healthy", "No active product is at or below its minimum stock level.");
+    },
+
+    rangeBar() {
+      const opts = [["today", "Today"], ["7d", "Last 7 Days"], ["30d", "Last 30 Days"], ["month", "This Month"], ["year", "This Year"], ["custom", "Custom"]];
+      return '<div class="admin-panel" style="margin-bottom:1rem"><div class="ap-body" style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">' +
+        '<span style="font-weight:800;font-size:.85rem;margin-right:.3rem">Period</span>' +
+        opts.map((o) => '<button class="btn btn-sm ' + (AdminPage.state.range === o[0] ? "btn-primary" : "btn-outline") + '" data-range="' + o[0] + '">' + o[1] + "</button>").join("") +
+        '<span id="range_custom" style="display:' + (AdminPage.state.range === "custom" ? "inline-flex" : "none") + ';gap:.4rem;align-items:center;margin-left:.4rem">' +
+        '<input class="input" type="date" id="range_from" style="padding:.4rem .6rem" value="' + AdminPage.state.from + '"/>' +
+        '<span style="opacity:.6">→</span>' +
+        '<input class="input" type="date" id="range_to" style="padding:.4rem .6rem" value="' + AdminPage.state.to + '"/>' +
+        '<button class="btn btn-sm btn-primary" id="range_apply">Apply</button></span>' +
+        "</div></div>";
+    },
+
+    bindRange() {
+      const buttons = Array.from(document.querySelectorAll("[data-range]"));
+      if (!buttons.length) return;
+      buttons.forEach((b) =>
+        b.addEventListener("click", () => {
+          AdminPage.state.range = b.getAttribute("data-range");
+          const custom = document.getElementById("range_custom");
+          if (custom) custom.style.display = AdminPage.state.range === "custom" ? "inline-flex" : "none";
+          buttons.forEach((x) => { x.className = "btn btn-sm " + (x === b ? "btn-primary" : "btn-outline"); });
+          if (AdminPage.state.range !== "custom") AdminPage.paint();
+        })
+      );
+      const apply = document.getElementById("range_apply");
+      if (apply) apply.addEventListener("click", () => {
+        AdminPage.state.from = (document.getElementById("range_from") || {}).value || "";
+        AdminPage.state.to = (document.getElementById("range_to") || {}).value || "";
+        AdminPage.paint();
+      });
+    },
+
+    bounds() {
+      const now = new Date();
+      const sod = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
+      const r = AdminPage.state.range;
+      let start = null, end = null;
+      if (r === "today") start = sod(now);
+      else if (r === "7d") start = sod(new Date(Date.now() - 6 * 864e5));
+      else if (r === "30d") start = sod(new Date(Date.now() - 29 * 864e5));
+      else if (r === "month") start = new Date(now.getFullYear(), now.getMonth(), 1);
+      else if (r === "year") start = new Date(now.getFullYear(), 0, 1);
+      else if (r === "custom") {
+        if (AdminPage.state.from) start = sod(new Date(AdminPage.state.from));
+        if (AdminPage.state.to) { end = new Date(AdminPage.state.to); end.setHours(23, 59, 59, 999); }
+      }
+      return { start, end };
+    },
+
+    filteredOrders() {
+      const { start, end } = this.bounds();
+      return this.data.orders.filter((o) => {
+        const t = new Date(o.created_at).getTime();
+        if (start && t < start.getTime()) return false;
+        if (end && t > end.getTime()) return false;
+        return true;
+      });
+    },
+
+    paint() {
+      const d = this.data;
+      const orders = this.filteredOrders();
       const completed = orders.filter((o) => o.status === "completed").length;
-      const revenue = orders
-        .filter((o) => o.status !== "cancelled")
-        .reduce((s, o) => s + Number(o.total || 0), 0);
-      const lowStock = products.filter((p) => Number(p.stock_quantity) <= 5).length;
+      const paid = orders.filter((o) => o.payment_status === "paid" && o.status !== "cancelled");
+      const productRevenue = paid.reduce((s, o) => s + Number(o.subtotal || 0), 0);
+      const outstandingProduct = orders.filter((o) => o.payment_status !== "paid" && o.status !== "cancelled").reduce((s, o) => s + Number(o.subtotal || 0), 0);
+      const deliveryOutstanding = orders
+        .filter((o) => o.fulfillment_method !== "pickup" && ["pending", "confirmed", "processing", "ready", "out for delivery"].indexOf(o.status) !== -1)
+        .reduce((s, o) => s + Number(o.delivery_fee || 0), 0);
+      const lowStock = d.products.filter((p) => !p.archived_at && p.active !== false && Number(p.stock_quantity) <= 5).length;
+      const pendingBulk = d.bulk.filter((b) => b.status === "new").length;
+      const pendingVisits = d.visits.filter((v) => v.status === "new").length;
+      const visibleProducts = d.products.filter((p) => p.active && !p.archived_at).length;
+
       const cards = [
         { label: "Total Orders", value: orders.length },
-        { label: "Pending Orders", value: pending },
+        { label: "Pending Orders", value: orders.filter((o) => o.status === "pending").length },
+        { label: "Confirmed Orders", value: orders.filter((o) => o.status === "confirmed").length },
         { label: "Completed Orders", value: completed },
-        { label: "Total Customers", value: customersCount },
-        { label: "Products", value: products.length },
-        { label: "Low Stock Items", value: lowStock, warn: lowStock > 0 },
+        { label: "Verified Revenue", value: ADMIN.money(productRevenue), sub: "Product payments received" },
+        { label: "Outstanding Product Payments", value: ADMIN.money(outstandingProduct), warn: outstandingProduct > 0 },
+        { label: "Delivery Fees Outstanding", value: ADMIN.money(deliveryOutstanding), warn: deliveryOutstanding > 0 },
+        { label: "Total Customers", value: d.customersCount },
+        { label: "Published Products", value: visibleProducts },
+        { label: "Low-Stock Products", value: lowStock, warn: lowStock > 0 },
+        { label: "Pending Bulk Requests", value: pendingBulk, warn: pendingBulk > 0 },
+        { label: "Pending Farm Visits", value: pendingVisits, warn: pendingVisits > 0 },
       ];
-      const el = document.getElementById("stat_grid");
-      el.innerHTML = cards
-        .map(
-          (c) =>
-            '<div class="stat-card"><div class="sc-label">' + c.label + "</div>" +
-            '<div class="sc-value">' + c.value + "</div>" +
-            (c.label === "Low Stock Items"
-              ? '<div class="sc-sub ' + (c.warn ? "down" : "up") + '">' + (c.warn ? "Review inventory" : "All healthy") + "</div>"
-              : "") +
-            "</div>"
-        )
-        .join("");
+      const grid = document.getElementById("stat_grid");
+      if (grid) grid.innerHTML = cards.map((c) =>
+        '<div class="stat-card"><div class="sc-label">' + c.label + "</div>" +
+        '<div class="sc-value"' + (c.warn ? ' style="color:var(--danger)"' : "") + ">" + c.value + "</div>" +
+        (c.sub ? '<div class="sc-sub">' + c.sub + "</div>" : "") +
+        "</div>").join("");
+
+      this.renderRecent(orders);
+      this.renderRevenue(orders);
+      this.renderStatus(orders);
+      this.renderBestSellers();
+      this.renderLowStock();
+      this.renderEnquiries();
+      this.renderPayments(orders);
+      this.renderCategoryPerf();
+      this.renderDestinations(orders);
     },
+
 
     renderRecent(orders) {
       const host = document.getElementById("recent_orders");
@@ -4508,49 +4853,195 @@ UI.toast("Welcome back, " + (cur.profile.full_name || "Admin") + "!", "success")
     renderRevenue(orders) {
       const host = document.getElementById("revenue_chart");
       if (!host) return;
-      const days = [];
-      for (let i = 6; i >= 0; i--) {
-        const d = new Date();
-        d.setHours(0, 0, 0, 0);
-        d.setDate(d.getDate() - i);
-        const key = d.toDateString();
-        const label = d.toLocaleDateString("en-NG", { weekday: "short" });
-        const sum = orders
-          .filter((o) => o.status !== "cancelled" && new Date(o.created_at).toDateString() === key)
+      const sod = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
+      const b = this.bounds();
+      const end = b.end ? new Date(b.end) : new Date();
+      const rawStart = b.start ? new Date(b.start) : new Date(Date.now() - 6 * 864e5);
+      const sumIn = (from, to) =>
+        orders
+          .filter((o) => o.status !== "cancelled")
+          .filter((o) => { const t = new Date(o.created_at).getTime(); return t >= from.getTime() && t <= to.getTime(); })
           .reduce((s, o) => s + Number(o.total || 0), 0);
-        days.push({ label, sum });
+
+      let days = [];
+      const isYear = AdminPage.state.range === "year";
+      const totalDays = Math.round((sod(end) - sod(rawStart)) / 864e5) + 1;
+      if (isYear) {
+        const names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+        for (let m = 0; m < 12; m++) {
+          const from = new Date(end.getFullYear(), m, 1);
+          const to = new Date(end.getFullYear(), m + 1, 0, 23, 59, 59, 999);
+          days.push({ label: names[m], sum: sumIn(from, to) });
+        }
+      } else if (totalDays > 31) {
+        let cursor = sod(rawStart);
+        while (cursor <= end) {
+          const from = new Date(cursor);
+          const to = new Date(cursor.getTime() + 6 * 864e5 + 86399999);
+          days.push({ label: from.toLocaleDateString("en-NG", { day: "numeric", month: "short" }), sum: sumIn(from, to) });
+          cursor = new Date(cursor.getTime() + 7 * 864e5);
+        }
+      } else {
+        for (let i = 0; i < totalDays; i++) {
+          const d = new Date(sod(rawStart).getTime() + i * 864e5);
+          days.push({ label: d.toLocaleDateString("en-NG", { day: "numeric", month: "short" }), sum: sumIn(d, new Date(d.getTime() + 86399999)) });
+        }
       }
       const max = Math.max.apply(null, days.map((d) => d.sum)) || 1;
       host.innerHTML =
         '<div class="bars">' +
         days
-          .map(
-            (d) =>
-              '<div class="bar-col"><div class="bar" style="height:' + (d.sum ? Math.max(4, (d.sum / max) * 100) : 2) + '%"></div>' +
-              "<span>" + d.label + "</span></div>"
-          )
+          .map((d) => '<div class="bar-col"><div class="bar" style="height:' + (d.sum ? Math.max(4, (d.sum / max) * 100) : 2) + '%" title="' + ADMIN.money(d.sum) + '"></div><span>' + d.label + "</span></div>")
           .join("") +
         "</div>" +
-        '<p class="hint">Total revenue per day (last 7 days), excluding cancelled orders.</p>';
+        '<p class="hint">Order value over the selected period, excluding cancelled orders.</p>';
     },
 
-    renderTopProducts(products) {
-      const host = document.getElementById("top_products");
-      const sorted = products.slice().sort((a, b) => Number(b.stock_quantity) - Number(a.stock_quantity)).slice(0, 5);
-      const low = products.filter((p) => p.stock_quantity <= 5).length;
+    renderBestSellers() {
+      const host = document.getElementById("best_products");
+      if (!host) return;
+      const orderIds = {};
+      this.filteredOrders().forEach((o) => { orderIds[o.id] = true; });
+      const byProduct = {};
+      (this.data.items || []).forEach((it) => {
+        if (orderIds[it.order_id] === undefined && Object.keys(orderIds).length) return;
+        const k = String(it.product_id || it.name || "unknown");
+        if (!byProduct[k]) byProduct[k] = { name: it.name || "Product", qty: 0, revenue: 0 };
+        byProduct[k].qty += Number(it.quantity || 0);
+        byProduct[k].revenue += Number(it.quantity || 0) * Number(it.unit_price || 0);
+      });
+      const rows = Object.keys(byProduct).map((k) => byProduct[k]).sort((a, b) => b.qty - a.qty).slice(0, 5);
+      if (!rows.length) {
+        host.innerHTML = ADMIN.emptyState("No sales yet", "Sold products will be ranked here.");
+        return;
+      }
+      const max = rows[0].qty || 1;
       host.innerHTML =
-        '<div class="pd-meta-grid" style="grid-template-columns:1fr">' +
-        sorted
-          .map(
-            (p) =>
-              '<div class="pd-meta"><svg aria-hidden="true"><use href="' + REC.sprite("i-box") + '"></use></svg>' +
-              "<div><strong>" + ADMIN.esc(p.name) + "</strong>" + p.stock_quantity + " in stock</div></div>"
-          )
-          .join("") +
-        "</div>" +
-        '<p class="admin-login-note" style="margin-top:1rem">' + low + " product" + (low === 1 ? "" : "s") + " at or below minimum stock.</p>";
+        '<div class="rank-list">' +
+        rows.map((r, i) =>
+          '<div class="rank-row"><span class="rank-no">' + (i + 1) + "</span>" +
+          '<div class="rank-main"><div class="rank-top"><strong>' + ADMIN.esc(r.name) + "</strong><span>" + r.qty + " sold</span></div>" +
+          '<div class="rank-bar"><i style="width:' + ((r.qty / max) * 100) + '%"></i></div></div></div>'
+        ).join("") +
+        "</div>";
+    },
+
+    renderLowStock() {
+      const host = document.getElementById("low_stock");
+      if (!host) return;
+      const rows = (this.data.products || [])
+        .filter((p) => !p.archived_at && p.active !== false && Number(p.stock_quantity) <= 5)
+        .sort((a, b) => Number(a.stock_quantity) - Number(b.stock_quantity))
+        .slice(0, 6);
+      if (!rows.length) {
+        host.innerHTML = ADMIN.emptyState("Stock is healthy", "No products at or below 5 units.");
+        return;
+      }
+      host.innerHTML =
+        '<div class="table-wrap"><table class="data-table"><thead><tr><th>Product</th><th>In stock</th><th></th></tr></thead><tbody>' +
+        rows.map((p) =>
+          '<tr><td class="t-strong">' + ADMIN.esc(p.name) + "</td>" +
+          '<td><span class="badge ' + (Number(p.stock_quantity) <= 0 ? "badge-red" : "badge-gold") + '">' + Number(p.stock_quantity || 0) + "</span></td>" +
+          '<td><a class="btn btn-sm btn-outline" href="inventory.html">Restock</a></td></tr>'
+        ).join("") +
+        "</tbody></table></div>";
+    },
+
+    renderEnquiries() {
+      const host = document.getElementById("latest_msgs");
+      if (!host) return;
+      const rows = (this.data.msgs || []).slice(0, 5);
+      if (!rows.length) {
+        host.innerHTML = ADMIN.emptyState("No enquiries yet", "Messages from the contact form appear here.");
+        return;
+      }
+      host.innerHTML =
+        '<div class="table-wrap"><table class="data-table"><thead><tr><th>From</th><th>Subject</th><th>Date</th></tr></thead><tbody>' +
+        rows.map((m) =>
+          "<tr><td class=\"t-strong\">" + ADMIN.esc(m.name || "—") + "</td><td>" + ADMIN.esc(m.subject || "General") + "</td>" +
+          "<td>" + ADMIN.date(m.created_at) + "</td></tr>"
+        ).join("") +
+        "</tbody></table></div>";
+    },
+
+    renderPayments(orders) {
+      const host = document.getElementById("latest_payments");
+      if (!host) return;
+      const rows = (orders || [])
+        .filter((o) => o.payment_status === "paid" || o.paid_at)
+        .sort((a, b) => new Date(b.paid_at || b.created_at) - new Date(a.paid_at || a.created_at))
+        .slice(0, 6);
+      if (!rows.length) {
+        host.innerHTML = ADMIN.emptyState("No payments recorded", "Verified payments will appear here.");
+        return;
+      }
+      host.innerHTML =
+        '<div class="table-wrap"><table class="data-table"><thead><tr><th>Reference</th><th>Customer</th><th>Amount</th><th>Status</th><th>Date</th></tr></thead><tbody>' +
+        rows.map((o) =>
+          "<tr><td class=\"t-strong\">" + ADMIN.esc(o.order_number) + "</td><td>" + ADMIN.esc(o.full_name || "—") + "</td>" +
+          "<td>" + ADMIN.money(o.subtotal != null ? o.subtotal : o.total) + "</td>" +
+          '<td><span class="badge badge-green">' + ADMIN.esc((o.payment_status || "paid").replace(/_/g, " ")) + "</span></td>" +
+          "<td>" + ADMIN.date(o.paid_at || o.created_at) + "</td></tr>"
+        ).join("") +
+        "</tbody></table></div>";
+    },
+
+    renderCategoryPerf() {
+      const host = document.getElementById("cat_perf");
+      if (!host) return;
+      const prodCat = {};
+      (this.data.products || []).forEach((p) => { prodCat[p.id] = p.category_id; });
+      const catName = {};
+      (this.data.categories || []).forEach((c) => { catName[c.id] = c.name; });
+      const orderIds = {};
+      this.filteredOrders().forEach((o) => { orderIds[o.id] = true; });
+      const byCat = {};
+      (this.data.items || []).forEach((it) => {
+        if (Object.keys(orderIds).length && orderIds[it.order_id] === undefined) return;
+        const cid = prodCat[it.product_id];
+        const key = cid != null ? String(cid) : "uncat";
+        if (!byCat[key]) byCat[key] = { label: catName[cid] || "Uncategorised", revenue: 0 };
+        byCat[key].revenue += Number(it.quantity || 0) * Number(it.unit_price || 0);
+      });
+      const rows = Object.keys(byCat).map((k) => byCat[k]).sort((a, b) => b.revenue - a.revenue).slice(0, 6);
+      if (!rows.length) {
+        host.innerHTML = ADMIN.emptyState("No category sales", "Category revenue will appear here.");
+        return;
+      }
+      const max = rows[0].revenue || 1;
+      host.innerHTML =
+        '<div class="rank-list">' +
+        rows.map((r) =>
+          '<div class="rank-row"><div class="rank-main"><div class="rank-top"><strong>' + ADMIN.esc(r.label) + "</strong><span>" + ADMIN.money(r.revenue) + "</span></div>" +
+          '<div class="rank-bar"><i style="width:' + ((r.revenue / max) * 100) + '%"></i></div></div></div>'
+        ).join("") +
+        "</div>";
+    },
+
+    renderDestinations(orders) {
+      const host = document.getElementById("dest_summary");
+      if (!host) return;
+      const byState = {};
+      (orders || []).forEach((o) => {
+        const key = o.state || "Unspecified";
+        if (!byState[key]) byState[key] = { count: 0, revenue: 0 };
+        byState[key].count += 1;
+        byState[key].revenue += Number(o.total || 0);
+      });
+      const rows = Object.keys(byState).map((k) => ({ label: k, count: byState[k].count, revenue: byState[k].revenue })).sort((a, b) => b.count - a.count).slice(0, 6);
+      if (!rows.length) {
+        host.innerHTML = ADMIN.emptyState("No destinations yet", "Order delivery destinations appear here.");
+        return;
+      }
+      host.innerHTML =
+        '<div class="table-wrap"><table class="data-table"><thead><tr><th>State</th><th>Orders</th><th>Value</th></tr></thead><tbody>' +
+        rows.map((r) =>
+          "<tr><td class=\"t-strong\">" + ADMIN.esc(r.label) + "</td><td>" + r.count + "</td><td>" + ADMIN.money(r.revenue) + "</td></tr>"
+        ).join("") +
+        "</tbody></table></div>";
     },
   };
+
 
   ADMIN.register("dashboard", AdminPage);
 })(window);
@@ -4564,7 +5055,8 @@ UI.toast("Welcome back, " + (cur.profile.full_name || "Admin") + "!", "success")
   const sb = () => REC.supabaseClient;
 
   const AdminPage = {
-    state: { products: [], categories: [], editId: null, search: "" },
+    state: { products: [], categories: [], editId: null, search: "", filterCat: "", filterStatus: "active", page: 1 },
+    pageSize: 10,
 
     async init() {
       document.title = "Products | REC Admin";
@@ -4572,16 +5064,24 @@ UI.toast("Welcome back, " + (cur.profile.full_name || "Admin") + "!", "success")
       const content = document.getElementById("admin-content");
       if (!sb()) return (content.innerHTML = ADMIN.emptyState("No connection", "Connect Supabase first."));
 
+      /* Sellers browse a read-only catalogue of published products. */
+      if (REC.auth.role() === "seller") return this.renderCatalogue(content);
+
       content.innerHTML =
         '<div class="admin-panel"><div class="ap-head">' +
         '<div><h3>Products</h3><span style="font-size:.8rem;color:var(--muted)">Manage your catalogue — everything updates live on the website.</span></div>' +
-        '<div style="display:flex;gap:.6rem;flex-wrap:wrap">' +
-        '<input class="input" id="p_search" type="search" placeholder="Search..." style="max-width:200px;padding:.55rem .8rem"/>' +
+        '<div style="display:flex;gap:.6rem;flex-wrap:wrap;align-items:center">' +
+        '<input class="input" id="p_search" type="search" placeholder="Search name / SKU..." style="max-width:190px;padding:.55rem .8rem"/>' +
+        '<select class="select" id="p_fcat" style="max-width:170px"><option value="">All categories</option></select>' +
+        '<select class="select" id="p_fstat" style="max-width:150px">' +
+        '<option value="active">Active</option><option value="hidden">Hidden</option><option value="archived">Archived</option><option value="all">All statuses</option>' +
+        "</select>" +
         '<button class="btn btn-sm btn-primary" id="p_add"><svg aria-hidden="true" style="width:16px;height:16px"><use href="' + REC.sprite("i-plus") + '"></use></svg> Add Product</button>' +
         "</div></div>" +
         '<div class="ap-body" id="p_list">' +
         ADMIN.skeleton(6) +
-        "</div></div>";
+        "</div>" +
+        '<div class="ap-footer" id="p_pager"></div></div>';
 
       await this.load();
       this.bind();
@@ -4595,20 +5095,44 @@ UI.toast("Welcome back, " + (cur.profile.full_name || "Admin") + "!", "success")
       this.state.products = p.data || [];
       this.state.categories = c.data || [];
       ADMIN.setCount("products", this.state.products.length);
+      this.fillCatFilter();
       this.render();
+    },
+
+    fillCatFilter() {
+      const el = document.getElementById("p_fcat");
+      if (!el) return;
+      el.innerHTML = '<option value="">All categories</option>' +
+        this.state.categories.map((c) => '<option value="' + c.id + '"' + (String(this.state.filterCat) === String(c.id) ? " selected" : "") + ">" + ADMIN.esc(c.name) + "</option>").join("");
+    },
+
+    filteredProducts() {
+      let list = this.state.products;
+      const s = this.state.search.trim().toLowerCase();
+      if (s) list = list.filter((x) => (x.name || "").toLowerCase().includes(s) || (x.sku || "").toLowerCase().includes(s));
+      if (this.state.filterCat) list = list.filter((x) => String(x.category_id) === String(this.state.filterCat));
+      const st = this.state.filterStatus;
+      if (st === "active") list = list.filter((x) => (x.active === true || x.active == null) && !x.archived_at);
+      else if (st === "hidden") list = list.filter((x) => (x.active === false) && !x.archived_at);
+      else if (st === "archived") list = list.filter((x) => !!x.archived_at);
+      return list;
     },
 
     render() {
       const host = document.getElementById("p_list");
       if (!host) return;
-      let list = this.state.products;
-      const s = this.state.search.trim().toLowerCase();
-      if (s) list = list.filter((x) => x.name.toLowerCase().includes(s));
-      if (!list.length) {
+      const all = this.filteredProducts();
+      const pages = Math.max(1, Math.ceil(all.length / this.pageSize));
+      if (this.state.page > pages) this.state.page = pages;
+      const list = all.slice((this.state.page - 1) * this.pageSize, this.state.page * this.pageSize);
+      if (!all.length) {
         host.innerHTML = ADMIN.emptyState(
-          "No products yet",
-          "Add your first product to make it visible in the shop."
+          "No products found",
+          this.state.search || this.state.filterCat || this.state.filterStatus !== "all"
+            ? "Try adjusting your filters."
+            : "Add your first product to make it visible in the shop."
         );
+        document.getElementById("p_pager").innerHTML = "";
         return;
       }
       const catName = (id) => {
@@ -4617,28 +5141,47 @@ UI.toast("Welcome back, " + (cur.profile.full_name || "Admin") + "!", "success")
       };
       host.innerHTML =
         '<div class="table-wrap"><table class="data-table"><thead><tr>' +
-        "<th>Product</th><th>Category</th><th>Price</th><th>Stock</th><th>Online Orderable</th><th>Status</th><th></th>" +
+        "<th>Product</th><th>SKU</th><th>Category</th><th>Price</th><th>Stock</th><th>Online Orderable</th><th>Status</th><th></th>" +
         "</tr></thead><tbody>" +
         list
           .map(
-            (p) =>
-              "<tr>" +
-              '<td><div class="t-prod"><img src="' + ADMIN.esc(REC.asset(p.image_url || "images/placeholder-product.svg")) + '" alt=""/>' +
-              '<div><span class="t-strong">' + ADMIN.esc(p.name) + "</span><br/>" +
-              '<span style="font-size:.78rem;color:var(--muted)">' + ADMIN.esc(p.unit || "") + "</span></div></div></td>" +
-              "<td>" + ADMIN.esc(catName(p.category_id)) + "</td>" +
-              "<td class=\"t-strong\">" + ADMIN.money(p.price) + "</td>" +
-              "<td>" + (p.stock_quantity > 0 ? p.stock_quantity : '<span style="color:var(--danger);font-weight:700">0</span>') + "</td>" +
-              "<td><span class=\"badge " + (p.online_orderable ? "badge-green" : "badge-red") + '">' + (p.online_orderable ? "Yes" : "Visit Farm") + "</span></td>" +
-              "<td><span class=\"badge " + (p.active ? "badge-green" : "badge-gray") + '">' + (p.active ? "Active" : "Hidden") + "</span>" +
-              (p.featured ? ' <span class="badge badge-gold">F</span>' : "") + "</td>" +
-              '<td><div class="t-actions">' +
-              '<button class="t-btn" data-edit="' + p.id + '" title="Edit"><svg><use href="' + REC.sprite("i-edit") + '"></use></svg></button>' +
-              '<button class="t-btn danger" data-del="' + p.id + '" title="Delete"><svg><use href="' + REC.sprite("i-trash") + '"></use></svg></button>' +
-              "</div></td></tr>"
+            (p) => {
+              const arch = !!p.archived_at;
+              return "<tr>" +
+                '<td><div class="t-prod"><img src="' + ADMIN.esc(REC.asset(p.image_url || "images/placeholder-product.svg")) + '" alt=""/>' +
+                '<div><span class="t-strong">' + ADMIN.esc(p.name) + "</span><br/>" +
+                '<span style="font-size:.78rem;color:var(--muted)">' + ADMIN.esc(p.unit || "") + "</span></div></div></td>" +
+                "<td><code>" + ADMIN.esc(p.sku || "—") + "</code></td>" +
+                "<td>" + ADMIN.esc(catName(p.category_id)) + "</td>" +
+                "<td class=\"t-strong\">" + ADMIN.money(p.price) + "</td>" +
+                "<td>" + (Number(p.stock_quantity) > 0 ? Number(p.stock_quantity) : '<span style="color:var(--danger);font-weight:700">0</span>') + "</td>" +
+                "<td><span class=\"badge " + (p.online_orderable ? "badge-green" : "badge-red") + '">' + (p.online_orderable ? "Yes" : "Visit Farm") + "</span></td>" +
+                "<td>" + (arch
+                  ? '<span class="badge badge-gray">Archived</span>'
+                  : '<span class="badge ' + (p.active ? "badge-green" : "badge-gray") + '">' + (p.active ? "Active" : "Hidden") + "</span>") +
+                (p.featured && !arch ? ' <span class="badge badge-gold">F</span>' : "") + "</td>" +
+                '<td><div class="t-actions">' +
+                '<a class="t-btn" href="' + REC.page("product") + "?id=" + p.id + '" target="_blank" rel="noopener" title="Preview"><svg><use href="' + REC.sprite("i-eye") + '"></use></svg></a>' +
+                '<button class="t-btn" data-edit="' + p.id + '" title="Edit"><svg><use href="' + REC.sprite("i-edit") + '"></use></svg></button>' +
+                (arch
+                  ? '<button class="t-btn" data-restore="' + p.id + '" title="Restore"><svg><use href="' + REC.sprite("i-refresh") + '"></use></svg></button>'
+                  : '<button class="t-btn" data-arch="' + p.id + '" title="Archive"><svg><use href="' + REC.sprite("i-box") + '"></use></svg></button>') +
+                '<button class="t-btn danger" data-del="' + p.id + '" title="Delete"><svg><use href="' + REC.sprite("i-trash") + '"></use></svg></button>' +
+                "</div></td></tr>";
+            }
           )
           .join("") +
         "</tbody></table></div>";
+      const pager = document.getElementById("p_pager");
+      const pageOf = (n) => '<button class="btn btn-sm ' + (n === this.state.page ? "btn-primary" : "btn-outline") + '" data-page="' + n + '">' + n + "</button>";
+      pager.innerHTML =
+        '<div style="display:flex;gap:.4rem;align-items:center;justify-content:space-between;flex-wrap:wrap">' +
+        '<span style="font-size:.8rem;color:var(--muted)">' + all.length + " product" + (all.length === 1 ? "" : "s") + "</span>" +
+        '<div style="display:flex;gap:.4rem;align-items:center">' +
+        (this.state.page > 1 ? '<button class="btn btn-sm btn-outline" data-page="' + (this.state.page - 1) + '">Prev</button>' : "") +
+        Array.from({ length: pages }, (_, i) => i + 1).map(pageOf).join("") +
+        (this.state.page < pages ? '<button class="btn btn-sm btn-outline" data-page="' + (this.state.page + 1) + '">Next</button>' : "") +
+        "</div></div>";
     },
 
     bind() {
@@ -4646,15 +5189,46 @@ UI.toast("Welcome back, " + (cur.profile.full_name || "Admin") + "!", "success")
       if (search) {
         search.addEventListener("input", () => {
           this.state.search = search.value;
+          this.state.page = 1;
           this.render();
         });
       }
+      const fcat = document.getElementById("p_fcat");
+      if (fcat) fcat.addEventListener("change", () => {
+        this.state.filterCat = fcat.value;
+        this.state.page = 1;
+        this.render();
+      });
+      const fstat = document.getElementById("p_fstat");
+      if (fstat) fstat.addEventListener("change", () => {
+        this.state.filterStatus = fstat.value;
+        this.state.page = 1;
+        this.render();
+      });
       document.getElementById("p_add").addEventListener("click", () => this.openForm());
+      document.getElementById("p_list").addEventListener("click", (e) => {
+        const pg = e.target.closest("[data-page]");
+        if (pg) {
+          this.state.page = Number(pg.getAttribute("data-page"));
+          this.render();
+        }
+      });
+      document.getElementById("p_pager").addEventListener("click", (e) => {
+        const pg = e.target.closest("[data-page]");
+        if (pg) {
+          this.state.page = Number(pg.getAttribute("data-page"));
+          this.render();
+        }
+      });
       document.addEventListener("click", (e) => {
         const ed = e.target.closest("[data-edit]");
         if (ed) this.openForm(ed.getAttribute("data-edit"));
         const dl = e.target.closest("[data-del]");
         if (dl) this.remove(dl.getAttribute("data-del"));
+        const ar = e.target.closest("[data-arch]");
+        if (ar) this.toggleArchive(ar.getAttribute("data-arch"), true);
+        const rs = e.target.closest("[data-restore]");
+        if (rs) this.toggleArchive(rs.getAttribute("data-restore"), false);
       });
     },
 
@@ -4676,6 +5250,7 @@ UI.toast("Welcome back, " + (cur.profile.full_name || "Admin") + "!", "success")
         "<h3>" + (p ? "Edit Product" : "Add Product") + "</h3>" +
         '<div class="admin-grid-2">' +
         '<div class="field"><label for="pf_name">Name *</label><input class="input" id="pf_name" value="' + ADMIN.esc(p ? p.name : "") + '"/></div>' +
+        '<div class="field"><label for="pf_sku">SKU</label><input class="input" id="pf_sku" value="' + ADMIN.esc(p ? p.sku || "" : "") + '" placeholder="e.g. B001"/></div>' +
         '<div class="field"><label for="pf_unit">Unit</label><input class="input" id="pf_unit" value="' + ADMIN.esc(p ? p.unit || "" : "per item") + '"/></div>' +
         '<div class="field"><label for="pf_price">Price (₦) *</label><input class="input" id="pf_price" type="number" min="0" step="0.01" value="' + (p ? p.price : "") + '"/></div>' +
         '<div class="field"><label for="pf_stock">Stock quantity</label><input class="input" id="pf_stock" type="number" min="0" value="' + (p ? p.stock_quantity : 0) + '"/></div>' +
@@ -4686,6 +5261,9 @@ UI.toast("Welcome back, " + (cur.profile.full_name || "Admin") + "!", "success")
         "</select></div>" +
         '<div class="field"><label for="pf_moq">Minimum order qty</label><input class="input" id="pf_moq" type="number" min="1" value="' + (p ? p.minimum_order_quantity : 1) + '"/></div>' +
         '<div class="field full"><label for="pf_desc">Description</label><textarea class="textarea" id="pf_desc" style="min-height:90px">' + ADMIN.esc(p ? p.description || "" : "") + "</textarea></div>" +
+        '<div class="field full"><label for="pf_short">Short description</label><textarea class="textarea" id="pf_short" style="min-height:56px">' + ADMIN.esc(p ? p.short_description || "" : "") + "</textarea></div>" +
+        '<div class="field full"><label for="pf_seo_title">SEO title</label><input class="input" id="pf_seo_title" value="' + ADMIN.esc(p ? p.seo_title || "" : "") + '"/></div>' +
+        '<div class="field full"><label for="pf_meta">Meta description</label><textarea class="textarea" id="pf_meta" style="min-height:56px">' + ADMIN.esc(p ? p.meta_description || "" : "") + "</textarea></div>" +
         '<div class="field"><label for="pf_breed">Breed / Type</label><input class="input" id="pf_breed" value="' + ADMIN.esc(p ? p.breed || "" : "") + '"/></div>' +
         '<div class="field"><label for="pf_age">Age</label><input class="input" id="pf_age" value="' + ADMIN.esc(p ? p.age || "" : "") + '"/></div>' +
         '<div class="field"><label for="pf_sex">Sex</label><input class="input" id="pf_sex" value="' + ADMIN.esc(p ? p.sex || "" : "") + '"/></div>' +
@@ -4748,12 +5326,16 @@ UI.toast("Welcome back, " + (cur.profile.full_name || "Admin") + "!", "success")
 
       const payload = {
         name,
+        sku: get("pf_sku").value.trim() || null,
         unit: get("pf_unit").value.trim() || "each",
         price,
         stock_quantity: Number(get("pf_stock").value || 0),
         category_id: Number(get("pf_cat").value) || null,
         minimum_order_quantity: Number(get("pf_moq").value || 1),
         description: get("pf_desc").value.trim(),
+        short_description: get("pf_short").value.trim() || null,
+        seo_title: get("pf_seo_title").value.trim() || null,
+        meta_description: get("pf_meta").value.trim() || null,
         breed: get("pf_breed").value.trim() || null,
         age: get("pf_age").value.trim() || null,
         sex: get("pf_sex").value.trim() || null,
@@ -4790,15 +5372,81 @@ UI.toast("Welcome back, " + (cur.profile.full_name || "Admin") + "!", "success")
     async remove(id) {
       const p = this.state.products.find((x) => x.id === id);
       if (!p) return;
-      if (!confirm("Delete \"" + p.name + "\"? This cannot be undone.")) return;
+      if (p.archived_at) return ADMIN.toast("Restore the product before deleting it", "error");
+      if (!confirm('Delete "' + p.name + '" permanently? This cannot be undone.')) return;
       try {
-        const { error } = await sb().from("products").delete().eq("id", id);
-        if (error) throw error;
+        const ref = await sb().from("order_items").select("id").eq("product_id", id).limit(1);
+        if (ref.data && ref.data.length) {
+          ADMIN.toast("This product is linked to past orders. Archive it instead of deleting.", "error");
+          return;
+        }
+        const { error: delErr } = await sb().from("products").delete().eq("id", id);
+        if (delErr) throw delErr;
         ADMIN.toast("Product deleted", "success");
         await this.load();
       } catch (e) {
         ADMIN.toast(e.message || "Delete failed", "error");
       }
+    },
+
+    async toggleArchive(id, archive) {
+      const p = this.state.products.find((x) => x.id === id);
+      if (!p) return;
+      if (!confirm(archive ? 'Archive "' + p.name + '"? It will disappear from the shop until restored.' : 'Restore "' + p.name + '" to the shop?')) return;
+      try {
+        const payload = archive ? { archived_at: new Date().toISOString(), active: false } : { archived_at: null };
+        const { error } = await sb().from("products").update(payload).eq("id", id);
+        if (error) throw error;
+        ADMIN.toast(archive ? "Product archived" : "Product restored", "success");
+        await this.load();
+      } catch (e) {
+        ADMIN.toast(e.message || "Action failed", "error");
+      }
+    },
+
+    /* Read-only catalogue for sellers: published products + live stock. */
+    async renderCatalogue(content) {
+      document.title = "Product Catalogue | REC Admin";
+      ADMIN.setState();
+      const host = document.getElementById("admin-content") || content;
+      host.innerHTML =
+        '<div class="admin-panel"><div class="ap-head"><div><h3>Product Catalogue</h3>' +
+        '<span style="font-size:.8rem;color:var(--muted)">Published products and their current stock. For changes, raise a Stock Request to the manager.</span></div>' +
+        '<input class="input" id="cat_search" type="search" placeholder="Search name / SKU..." style="max-width:220px;padding:.55rem .8rem"/>' +
+        "</div><div class=\"ap-body\" id=\"cat_list\">" + ADMIN.skeleton(6) + "</div></div>";
+
+      const [p, c] = await Promise.all([
+        sb().from("products").select("*").order("created_at", { ascending: false }),
+        sb().from("categories").select("id,name"),
+      ]);
+      const products = (p.data || []).filter((x) => x.active !== false && !x.archived_at);
+      const cat = {};
+      (c.data || []).forEach((x) => (cat[x.id] = x.name));
+
+      const list = document.getElementById("cat_list");
+      const search = document.getElementById("cat_search");
+      const paint = () => {
+        const q = (search.value || "").trim().toLowerCase();
+        const rows = products.filter((x) => !q || (x.name || "").toLowerCase().includes(q) || (x.sku || "").toLowerCase().includes(q));
+        if (!rows.length) {
+          list.innerHTML = ADMIN.emptyState("Nothing found", "No published product matches your search.");
+          return;
+        }
+        list.innerHTML =
+          '<div class="table-wrap"><table class="data-table"><thead><tr><th>Product</th><th>Category</th><th>Stock</th><th>Unit</th><th>Price</th><th>Status</th></tr></thead><tbody>' +
+          rows.map((x) => {
+            const low = Number(x.stock_quantity) <= 5;
+            return "<tr><td class=\"t-strong\">" + ADMIN.esc(x.name) + '<br/><span style="font-size:.78rem;color:var(--muted)">' + ADMIN.esc(x.sku || "") + "</span></td>" +
+              "<td>" + ADMIN.esc(cat[x.category_id] || "—") + "</td>" +
+              '<td><span class="badge ' + (low ? "badge-red" : "badge-green") + '">' + (x.stock_quantity == null ? "—" : x.stock_quantity) + "</span></td>" +
+              "<td>" + ADMIN.esc(x.unit || "—") + "</td>" +
+              "<td>" + ADMIN.money(x.price) + "</td>" +
+              '<td><span class="badge badge-green">Active</span></td></tr>';
+          }).join("") +
+          "</tbody></table></div>";
+      };
+      search.addEventListener("input", paint);
+      paint();
     },
   };
 
@@ -4858,19 +5506,23 @@ UI.toast("Welcome back, " + (cur.profile.full_name || "Admin") + "!", "success")
         return;
       }
       host.innerHTML =
-        '<div class="table-wrap"><table class="data-table"><thead><tr><th>Category</th><th>Slug</th><th>Image</th><th>Sort</th><th></th></tr></thead><tbody>' +
+        '<div class="table-wrap"><table class="data-table"><thead><tr><th>Category</th><th>Parent</th><th>Slug</th><th>Status</th><th>Image</th><th>Sort</th><th></th></tr></thead><tbody>' +
         this.state.rows
           .map(
-            (c) =>
-              "<tr>" +
-              '<td class="t-strong">' + ADMIN.esc(c.name) + "</td>" +
-              "<td><code>" + ADMIN.esc(c.slug) + "</code></td>" +
-              '<td><div class="t-prod"><img src="' + ADMIN.esc(REC.asset(c.image || "images/placeholder-product.svg")) + '" alt=""/></div></td>' +
-              "<td>" + c.sort_order + "</td>" +
-              '<td><div class="t-actions">' +
-              '<button class="t-btn" data-edit="' + c.id + '" title="Edit"><svg><use href="' + REC.sprite("i-edit") + '"></use></svg></button>' +
-              '<button class="t-btn danger" data-del="' + c.id + '" title="Delete"><svg><use href="' + REC.sprite("i-trash") + '"></use></svg></button>' +
-              "</div></td></tr>"
+            (c) => {
+              const parent = this.state.rows.find((x) => String(x.id) === String(c.parent_id));
+              return "<tr>" +
+                '<td class="t-strong">' + ADMIN.esc(c.name) + "</td>" +
+                "<td>" + ADMIN.esc(parent ? parent.name : "—") + "</td>" +
+                "<td><code>" + ADMIN.esc(c.slug) + "</code></td>" +
+                '<td><span class="badge ' + (c.active === false ? "badge-gray" : "badge-green") + '">' + (c.active === false ? "Hidden" : "Active") + "</span></td>" +
+                '<td><div class="t-prod"><img src="' + ADMIN.esc(REC.asset(c.image || "images/placeholder-product.svg")) + '" alt=""/></div></td>' +
+                "<td>" + c.sort_order + "</td>" +
+                '<td><div class="t-actions">' +
+                '<button class="t-btn" data-edit="' + c.id + '" title="Edit"><svg><use href="' + REC.sprite("i-edit") + '"></use></svg></button>' +
+                '<button class="t-btn danger" data-del="' + c.id + '" title="Delete"><svg><use href="' + REC.sprite("i-trash") + '"></use></svg></button>' +
+                "</div></td></tr>";
+            }
           )
           .join("") +
         "</tbody></table></div>";
@@ -4891,11 +5543,20 @@ UI.toast("Welcome back, " + (cur.profile.full_name || "Admin") + "!", "success")
         '<button class="modal-close" data-close aria-label="Close"><svg><use href="' + REC.sprite("i-close") + '"></use></svg></button>' +
         "<h3>" + (c ? "Edit Category" : "Add Category") + "</h3>" +
         '<div class="field"><label for="cf_name">Name *</label><input class="input" id="cf_name" value="' + ADMIN.esc(c ? c.name : "") + '"/></div>' +
+        '<div class="field"><label for="cf_parent">Parent category</label><select class="select" id="cf_parent">' +
+        '<option value="">None (top level)</option>' +
+        this.state.rows
+          .filter((x) => String(x.id) !== String(id))
+          .map((x) => '<option value="' + x.id + '"' + (c && String(c.parent_id) === String(x.id) ? " selected" : "") + ">" + ADMIN.esc(x.name) + "</option>")
+          .join("") +
+        "</select></div>" +
         '<div class="field"><label for="cf_desc">Description</label><textarea class="textarea" id="cf_desc" style="min-height:70px">' + ADMIN.esc(c ? c.description || "" : "") + "</textarea></div>" +
         '<div class="field"><label for="cf_image">Image URL</label><input class="input" id="cf_image" value="' + ADMIN.esc(c ? c.image || "" : "") + '" placeholder="https://… or assets/images/…"/>' +
         '<label class="btn btn-sm btn-outline" style="margin-top:.5rem;width:fit-content;cursor:pointer"><svg aria-hidden="true" style="width:16px;height:16px"><use href="' + REC.sprite("i-upload") + '"></use></svg> Upload' +
         '<input type="file" id="cf_file" accept="image/*" style="display:none"/></label></div>' +
         '<div class="field"><label for="cf_sort">Sort order</label><input class="input" id="cf_sort" type="number" value="' + (c ? c.sort_order : 1) + '"/></div>' +
+        '<div class="switch-row" style="grid-column:1/-1"><div><div class="sr-label">Active</div><div class="sr-hint">Visible on the homepage tiles and shop</div></div>' +
+        '<label class="switch"><input type="checkbox" id="cf_active"' + (!c || c.active !== false ? " checked" : "") + '><span class="slider"></span></label></div>' +
         '<div class="form-actions"><button class="btn btn-primary" id="cf_save">Save</button><button class="btn btn-outline" data-close>Cancel</button></div></div>';
       modal.classList.add("open");
       modal.querySelectorAll("[data-close]").forEach((el) => el.addEventListener("click", () => modal.classList.remove("open")));
@@ -4927,6 +5588,8 @@ UI.toast("Welcome back, " + (cur.profile.full_name || "Admin") + "!", "success")
         description: document.getElementById("cf_desc").value.trim() || null,
         image: document.getElementById("cf_image").value.trim() || null,
         sort_order: Number(document.getElementById("cf_sort").value || 1),
+        parent_id: document.getElementById("cf_parent").value ? Number(document.getElementById("cf_parent").value) : null,
+        active: document.getElementById("cf_active").checked,
       };
       try {
         if (id) {
@@ -5517,7 +6180,7 @@ UI.toast("Welcome back, " + (cur.profile.full_name || "Admin") + "!", "success")
               "<td>" + ADMIN.esc(r.location || "") + "</td>" +
               '<td style="color:var(--rec-gold)">' + stars(Math.min(5, r.rating || 5)) + "</td>" +
               '<td style="max-width:340px">' + ADMIN.esc(r.message && r.message.length > 90 ? r.message.slice(0, 90) + "…" : r.message || "") + "</td>" +
-              '<td><label class="switch"><input type="checkbox" data-active="' + r.id + '"' + (r.published ? " checked" : "") + '><span class="slider"></span></label></td>' +
+              '<td><label class="switch"><input type="checkbox" name="published" data-active="' + r.id + '"' + (r.published ? " checked" : "") + '><span class="slider"></span></label></td>' +
               '<td><div class="t-actions">' +
               '<button class="t-btn" data-edit="' + r.id + '" title="Edit"><svg><use href="' + REC.sprite("i-edit") + '"></use></svg></button>' +
               '<button class="t-btn danger" data-del="' + r.id + '" title="Delete"><svg><use href="' + REC.sprite("i-trash") + '"></use></svg></button>' +
@@ -5708,8 +6371,8 @@ UI.toast("Welcome back, " + (cur.profile.full_name || "Admin") + "!", "success")
               '<td style="color:var(--rec-gold);white-space:nowrap">' + stars(Math.min(5, r.rating || 0)) + "</td>" +
               '<td style="max-width:320px">' + ADMIN.esc(r.comment && r.comment.length > 90 ? r.comment.slice(0, 90) + "…" : r.comment || "") + "</td>" +
               "<td>" + ADMIN.date(r.created_at) + "</td>" +
-              '<td><label class="switch"><input type="checkbox" data-feature="' + r.id + '"' + (r.featured ? " checked" : "") + '><span class="slider"></span></label></td>' +
-              '<td><label class="switch"><input type="checkbox" data-approved="' + r.id + '"' + (r.approved ? " checked" : "") + '><span class="slider"></span></label></td>' +
+              '<td><label class="switch"><input type="checkbox" name="featured" data-feature="' + r.id + '"' + (r.featured ? " checked" : "") + '><span class="slider"></span></label></td>' +
+              '<td><label class="switch"><input type="checkbox" name="approved" data-approved="' + r.id + '"' + (r.approved ? " checked" : "") + '><span class="slider"></span></label></td>' +
               '<td><div class="t-actions">' +
               '<button class="t-btn danger" data-del="' + r.id + '" title="Delete"><svg><use href="' + REC.sprite("i-trash") + '"></use></svg></button>' +
               "</div></td></tr>"
@@ -5830,7 +6493,7 @@ UI.toast("Welcome back, " + (cur.profile.full_name || "Admin") + "!", "success")
               '<td class="t-strong">' + ADMIN.esc(r.title) + "</td>" +
               "<td>" + ADMIN.esc(r.category || "Guides") + "</td>" +
               "<td>" + (r.published_at ? ADMIN.date(r.published_at) : "—") + "</td>" +
-              '<td><label class="switch"><input type="checkbox" data-active="' + r.id + '"' + (r.published ? " checked" : "") + '><span class="slider"></span></label></td>' +
+              '<td><label class="switch"><input type="checkbox" name="published" data-active="' + r.id + '"' + (r.published ? " checked" : "") + '><span class="slider"></span></label></td>' +
               '<td><div class="t-actions">' +
               '<button class="t-btn" data-edit="' + r.id + '" title="Edit"><svg><use href="' + REC.sprite("i-edit") + '"></use></svg></button>' +
               '<button class="t-btn danger" data-del="' + r.id + '" title="Delete"><svg><use href="' + REC.sprite("i-trash") + '"></use></svg></button>' +
@@ -6216,19 +6879,39 @@ UI.toast("Welcome back, " + (cur.profile.full_name || "Admin") + "!", "success")
     ready: "badge-green", "out for delivery": "badge-green",
     completed: "badge-green", cancelled: "badge-red",
   };
+  const STATUS_LABEL = {};
+  STATUS.forEach(([k, v]) => (STATUS_LABEL[k] = v));
+
+  /* Sellers may only move an assigned order through these transitions.
+     The DB trigger (validate_order_update) is the real authority; this just
+     avoids offering impossible options in the UI. */
+  const SELLER_NEXT = {
+    pending: ["confirmed", "processing"],
+    confirmed: ["processing", "cancelled"],
+    processing: ["ready"],
+    ready: ["out for delivery", "cancelled"],
+  };
+  const statusOptions = (current, isSeller) => {
+    if (!isSeller) return STATUS;
+    const keys = SELLER_NEXT[current] || [];
+    return [[current, STATUS_LABEL[current] || current]].concat(
+      keys.map((k) => [k, STATUS_LABEL[k] || k])
+    );
+  };
 
   const AdminPage = {
     state: { orders: [], filter: "all", search: "" },
 
     async init() {
-      document.title = "Orders | REC Admin";
+      const isSeller = REC.auth.role() === "seller";
+      document.title = (isSeller ? "My Orders | " : "Orders | ") + "REC Admin";
       ADMIN.setState();
       const content = document.getElementById("admin-content");
       if (!sb()) return (content.innerHTML = ADMIN.emptyState("No connection", "Connect Supabase first."));
 
       content.innerHTML =
-        '<div class="admin-panel"><div class="ap-head"><div><h3>Orders</h3>' +
-        '<span style="font-size:.8rem;color:var(--muted)">Update fulfilment status to keep customers informed.</span></div>' +
+        '<div class="admin-panel"><div class="ap-head"><div><h3>' + (isSeller ? "My Orders" : "Orders") + "</h3>" +
+        '<span style="font-size:.8rem;color:var(--muted)">' + (isSeller ? "Orders assigned to you by the manager. Status updates go straight to customers." : "Update fulfilment status to keep customers informed.") + "</span></div>" +
         '<div style="display:flex;gap:.6rem;flex-wrap:wrap">' +
         '<select class="select" id="o_filter" style="max-width:180px"></select>' +
         '<input class="input" id="o_search" type="search" placeholder="Reference / name..." style="max-width:220px;padding:.55rem .8rem"/>' +
@@ -6246,6 +6929,7 @@ UI.toast("Welcome back, " + (cur.profile.full_name || "Admin") + "!", "success")
     },
 
     async load() {
+      const isSeller = REC.auth.role() === "seller";
       const { data, error } = await sb()
         .from("orders")
         .select("*")
@@ -6254,7 +6938,7 @@ UI.toast("Welcome back, " + (cur.profile.full_name || "Admin") + "!", "success")
       if (error) return ADMIN.toast(error.message, "error");
       this.state.orders = data || [];
       ADMIN.setCount(
-        "orders",
+        isSeller ? "my_orders" : "orders",
         this.state.orders.filter((o) => o.status === "pending").length
       );
       this.render();
@@ -6262,16 +6946,16 @@ UI.toast("Welcome back, " + (cur.profile.full_name || "Admin") + "!", "success")
 
     render() {
       const host = document.getElementById("o_list");
+      const isSeller = REC.auth.role() === "seller";
       let list = this.state.orders;
       if (this.state.filter !== "all") list = list.filter((o) => o.status === this.state.filter);
       const s = this.state.search.trim().toLowerCase();
       if (s) list = list.filter((o) => (o.order_number || "").toLowerCase().includes(s) || (o.full_name || "").toLowerCase().includes(s) || (o.phone || "").toLowerCase().includes(s));
 
       if (!list.length) {
-        host.innerHTML = ADMIN.emptyState("No orders", "Orders placed on the checkout page appear here.");
+        host.innerHTML = ADMIN.emptyState("No orders", isSeller ? "No orders have been assigned to you yet." : "Orders placed on the checkout page appear here.");
         return;
       }
-      const optAll = STATUS.map(([k, v]) => '<option value="' + k + '">' + v + "</option>").join("");
       host.innerHTML =
         '<div class="table-wrap"><table class="data-table"><thead><tr>' +
         "<th>Reference</th><th>Customer</th><th>Items</th><th>Total</th><th>Date</th><th>Status</th>" +
@@ -6280,6 +6964,8 @@ UI.toast("Welcome back, " + (cur.profile.full_name || "Admin") + "!", "success")
           .map(
             (o) => {
               const items = o.items ? (Array.isArray(o.items) ? o.items.length : 0) : 0;
+              const opts = statusOptions(o.status, isSeller);
+              const optAll = opts.map(([k, v]) => '<option value="' + k + '">' + v + "</option>").join("");
               return (
                 "<tr>" +
                 '<td class="t-strong"><button class="t-link" data-id="' + o.id + '">' + ADMIN.esc(o.order_number) + "</button></td>" +
@@ -6377,6 +7063,659 @@ UI.toast("Welcome back, " + (cur.profile.full_name || "Admin") + "!", "success")
   };
 
   ADMIN.register("orders", AdminPage);
+})(window);
+
+/* ============================================================
+   REC — Admin Profile (display details + password)
+   ============================================================ */
+(function (win) {
+  "use strict";
+  const REC = (win.REC = win.REC || {});
+  const ADMIN = (win.RECAdmin = win.RECAdmin || {});
+  const sb = () => REC.supabaseClient;
+
+  const AdminPage = {
+    async init() {
+      document.title = "Profile & Password | REC Admin";
+      ADMIN.setState();
+      const content = document.getElementById("admin-content");
+      if (!content) return;
+      const me = REC.auth.currentUser();
+      const p = (me && me.profile) || {};
+
+      content.innerHTML =
+        '<div class="admin-panel"><div class="ap-head"><div><h3>Profile & Password</h3>' +
+        '<span style="font-size:.8rem;color:var(--muted)">Keep your display details and sign-in password current.</span></div></div>' +
+        '<div class="ap-body">' +
+        '<div class="pd-meta"><strong>Role</strong>: ' + ADMIN.esc(ADMIN.ROLE_LABEL[p.role] || p.role || "—") + "</div>" +
+        '<div class="pd-meta"><strong>Email</strong>: ' + ADMIN.esc((me && me.user && me.user.email) || "—") + "</div>" +
+        '<div class="field" style="max-width:460px"><label for="p_name">Full name</label>' +
+        '<input class="input" id="p_name" value="' + ADMIN.esc(p.full_name || "") + '"/></div>' +
+        '<div class="field" style="max-width:460px"><label for="p_phone">Phone</label>' +
+        '<input class="input" id="p_phone" value="' + ADMIN.esc(p.phone || "") + '"/></div>' +
+        '<div style="margin-top:1rem"><button class="btn btn-primary" id="p_save">Save Profile</button></div>' +
+        "</div></div>" +
+        '<div class="admin-panel"><div class="ap-head"><h3>Change password</h3></div><div class="ap-body">' +
+        '<p class="hint" style="margin-top:0">If you are an administrator and need to reset a staff password, the staff member should use the "Forgot password" link at the login page.</p>' +
+        '<div class="field" style="max-width:460px"><label for="p_pw">New password</label>' +
+        '<input class="input" id="p_pw" type="password" autocomplete="new-password" placeholder="At least 6 characters"/></div>' +
+        '<div style="margin-top:1rem"><button class="btn btn-primary" id="p_pwbtn">Update Password</button></div>' +
+        "</div></div>";
+
+      document.getElementById("p_save").addEventListener("click", async () => {
+        const name = document.getElementById("p_name").value.trim();
+        const phone = document.getElementById("p_phone").value.trim();
+        if (!name) return ADMIN.toast("Full name is required", "error");
+        const btn = document.getElementById("p_save");
+        btn.disabled = true;
+        try {
+          const { error } = await sb()
+            .from("profiles")
+            .update({ full_name: name, phone: phone || null })
+            .eq("id", me.user.id);
+          if (error) throw error;
+          await REC.auth.refreshProfile();
+          ADMIN.toast("Profile updated", "success");
+        } catch (e) {
+          ADMIN.toast(e.message || "Update failed", "error");
+        }
+        btn.disabled = false;
+      });
+
+      document.getElementById("p_pwbtn").addEventListener("click", async () => {
+        const pw = document.getElementById("p_pw").value;
+        if (!pw || pw.length < 6) return ADMIN.toast("Password must be at least 6 characters", "error");
+        const btn = document.getElementById("p_pwbtn");
+        btn.disabled = true;
+        try {
+          const { error } = await REC.supabaseClient.auth.updateUser({ password: pw });
+          if (error) throw error;
+          ADMIN.toast("Password updated", "success");
+          document.getElementById("p_pw").value = "";
+        } catch (e) {
+          ADMIN.toast(e.message || "Could not update password", "error");
+        }
+        btn.disabled = false;
+      });
+    },
+  };
+
+  ADMIN.register("profile", AdminPage);
+})(window);
+/* ============================================================
+   REC — Admin Staff directory (view + full-admin account control)
+   ============================================================ */
+(function (win) {
+  "use strict";
+  const REC = (win.REC = win.REC || {});
+  const ADMIN = (win.RECAdmin = win.RECAdmin || {});
+  const sb = () => REC.supabaseClient;
+  const STAFF_ROLES = ["owner", "administrator", "admin", "manager", "seller"];
+  const ROLE_OPTIONS = [
+    ["administrator", "Administrator"],
+    ["admin", "Administrator"],
+    ["manager", "Manager"],
+    ["seller", "Seller"],
+  ];
+
+  const AdminPage = {
+    state: { rows: [] },
+
+    async init() {
+      document.title = "Staff | REC Admin";
+      ADMIN.setState();
+      const content = document.getElementById("admin-content");
+      if (!content) return;
+      const me = REC.auth.currentUser();
+      const canManage = REC.auth.isAdmin();
+
+      content.innerHTML =
+        '<div class="admin-panel"><div class="ap-head"><div><h3>Staff</h3>' +
+        '<span style="font-size:.8rem;color:var(--muted)">' +
+        (canManage
+          ? "Activate, suspend or change roles. Only the current owner can grant the Owner role; administrators cannot be assigned Owner from here to keep the login guard enforced."
+          : "Read-only staff directory. Role changes and suspension are performed by an administrator.")
+        + "</span></div></div>" +
+        '<div class="ap-body" id="staff_list">' + ADMIN.skeleton(6) + "</div></div>";
+
+      const { data, error } = await sb()
+        .from("profiles")
+        .select("id, full_name, phone, avatar_url, role, active, created_at")
+        .in("role", STAFF_ROLES)
+        .order("role")
+        .order("created_at", { ascending: false });
+      if (error) return (document.getElementById("staff_list").innerHTML = ADMIN.emptyState("Could not load staff", error.message));
+      this.state.rows = data || [];
+      this.render(me);
+    },
+
+    render(me) {
+      const host = document.getElementById("staff_list");
+      const canManage = REC.auth.isAdmin();
+      if (!this.state.rows.length) {
+        host.innerHTML = ADMIN.emptyState("No staff yet", "Promote accounts via the profile manager (e.g. update public.profiles set role='seller' ...).");
+        return;
+      }
+      host.innerHTML =
+        '<div class="table-wrap"><table class="data-table"><thead><tr>' +
+        "<th>Name</th><th>Phone</th><th>Role</th><th>Account</th><th>Since</th>" +
+        (canManage ? "<th>Actions</th>" : "") +
+        '</tr></thead><tbody>' +
+        this.state.rows.map((s) => {
+          const isSelf = me && me.user && me.user.id === s.id;
+          const roleOpts = ROLE_OPTIONS.map(([v, l]) =>
+            '<option value="' + v + '"' + (s.role === v || (s.role === "admin" && v === "admin") ? " selected" : "") + ">" + l + "</option>"
+          ).join("");
+          const suspended = s.active === false;
+          return "<tr>" +
+            '<td class="t-strong">' + ADMIN.esc(s.full_name || "—") + (isSelf ? ' <span style="font-size:.72rem;opacity:.6">(you)</span>' : "") + "</td>" +
+            "<td>" + ADMIN.esc(s.phone || "—") + "</td>" +
+            "<td>" + ADMIN.esc(ADMIN.ROLE_LABEL[s.role] || s.role) + "</td>" +
+            '<td><span class="badge ' + (suspended ? "badge-red" : "badge-green") + '">' + (suspended ? "Suspended" : "Active") + "</span></td>" +
+            "<td>" + ADMIN.date(s.created_at) + "</td>" +
+            (canManage
+              ? "<td>" + (isSelf
+                  ? '<span style="font-size:.78rem;opacity:.6">Self</span>'
+                  : '<div style="display:flex;gap:.4rem;flex-wrap:wrap;align-items:center">' +
+                    '<select class="select s-role" style="padding:.3rem .4rem;font-size:.78rem" data-id="' + s.id + '">' + roleOpts + "</select>" +
+                    '<button class="btn btn-sm ' + (suspended ? "btn-primary" : "btn-outline") + '" data-toggle="' + s.id + '">' + (suspended ? "Activate" : "Suspend") + "</button></div>")
+              : "") +
+            "</td></tr>";
+        }).join("") +
+        "</tbody></table></div>";
+
+      host.querySelectorAll(".s-role").forEach((sel) =>
+        sel.addEventListener("change", async () => {
+          const id = sel.getAttribute("data-id");
+          const { error } = await sb().from("profiles").update({ role: sel.value }).eq("id", id);
+          if (error) return ADMIN.toast(error.message, "error");
+          ADMIN.toast("Role updated", "success");
+          await this.init();
+        })
+      );
+      host.querySelectorAll("[data-toggle]").forEach((btn) =>
+        btn.addEventListener("click", async () => {
+          const id = btn.getAttribute("data-toggle");
+          const s = this.state.rows.find((x) => x.id === id);
+          const suspended = s.active === false;
+          const payload = suspended
+            ? { active: true, suspended_at: null }
+            : { active: false, suspended_at: new Date().toISOString() };
+          const { error } = await sb().from("profiles").update(payload).eq("id", id);
+          if (error) return ADMIN.toast(error.message, "error");
+          ADMIN.toast(suspended ? "Account activated" : "Account suspended", "success");
+          await this.init();
+        })
+      );
+    },
+  };
+
+  ADMIN.register("staff", AdminPage);
+})(window);
+/* ============================================================
+   REC — Admin Seller Assignments (manager allocates orders)
+   ============================================================ */
+(function (win) {
+  "use strict";
+  const REC = (win.REC = win.REC || {});
+  const ADMIN = (win.RECAdmin = win.RECAdmin || {});
+  const sb = () => REC.supabaseClient;
+
+  const AdminPage = {
+    state: { sellers: [], orders: [], assignments: [], map: {} },
+
+    async init() {
+      document.title = "Seller Assignments | REC Admin";
+      ADMIN.setState();
+      const content = document.getElementById("admin-content");
+      if (!content) return;
+
+      content.innerHTML =
+        '<div class="admin-panel"><div class="ap-head"><div><h3>Seller Assignments</h3>' +
+        '<span style="font-size:.8rem;color:var(--muted)">Allocate orders to sellers. Each order has one active seller; reassigning moves it to another seller.</span></div></div>' +
+        '<div class="ap-body">' +
+        '<div class="grid-2" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:.6rem">' +
+        '<select class="select" id="a_order"><option value="">Select an order...</option></select>' +
+        '<select class="select" id="a_seller"><option value="">Select a seller...</option></select>' +
+        '<button class="btn btn-sm btn-primary" id="a_assign">Assign Seller</button>' +
+        "</div>" +
+        '<div id="a_assign_note" style="margin-top:.4rem;font-size:.78rem;color:var(--muted)"></div>' +
+        "</div></div>" +
+        '<div class="admin-panel"><div class="ap-head"><h3>Current assignments</h3></div>' +
+        '<div class="ap-body" id="a_list">' + ADMIN.skeleton(6) + "</div></div>";
+
+      const me = REC.auth.currentUser();
+
+      const [sellersR, ordersR, assignR] = await Promise.all([
+        sb().from("profiles").select("id, full_name").eq("role", "seller").order("full_name"),
+        sb().from("orders").select("id, order_number, full_name, status, payment_status, total").order("created_at", { ascending: false }).limit(400),
+        sb().from("seller_assignments").select("*"),
+      ]);
+
+      this.state.sellers = sellersR.data || [];
+      this.state.orders = ordersR.data || [];
+      this.state.assignments = assignR.data || [];
+      this.state.map = {};
+      this.state.sellers.forEach((s) => (this.state.map[s.id] = s.full_name || "Seller"));
+
+      const orderSel = document.getElementById("a_order");
+      const sellersEl = document.getElementById("a_seller");
+      sellersEl.innerHTML = '<option value="">Select a seller...</option>' +
+        this.state.sellers.map((s) => '<option value="' + s.id + '">' + ADMIN.esc(s.full_name || "Seller") + "</option>").join("");
+      if (!this.state.sellers.length) orderSel.innerHTML = '<option value="">No seller accounts yet</option>';
+      this.renderList(me);
+
+      orderSel.addEventListener("change", () => {
+        const note = document.getElementById("a_assign_note");
+        const a = this.state.assignments.find((x) => x.order_id === orderSel.value);
+        note.textContent = a ? "This order is currently assigned to " + (this.state.map[a.seller_id] || "a seller") + ". Reassign to update it." : "";
+      });
+      document.getElementById("a_assign").addEventListener("click", async () => {
+        const orderId = orderSel.value;
+        const sellerId = sellersEl.value;
+        if (!orderId || !sellerId) return ADMIN.toast("Choose an order and a seller", "error");
+        try {
+          const { error } = await sb()
+            .from("seller_assignments")
+            .upsert(
+              { order_id: orderId, seller_id: sellerId, assigned_by: me.user.id, status: "assigned" },
+              { onConflict: "order_id", ignoreDuplicates: false }
+            );
+          if (error) throw error;
+          ADMIN.toast("Order assigned", "success");
+          await this.init();
+        } catch (e) {
+          ADMIN.toast(e.message || "Assignment failed", "error");
+        }
+      });
+    },
+
+    renderList(me) {
+      const host = document.getElementById("a_list");
+      if (!this.state.assignments.length) {
+        host.innerHTML = ADMIN.emptyState("No assignments yet", "Assign your first order to a seller above.");
+        return;
+      }
+      const orderMap = {};
+      this.state.orders.forEach((o) => (orderMap[o.id] = o));
+      const rows = this.state.assignments
+        .map((a) => {
+          const o = orderMap[a.order_id];
+          return { a, o };
+        })
+        .filter((x) => x.o)
+        .sort((x, y) => new Date(y.a.updated_at) - new Date(x.a.updated_at));
+
+      host.innerHTML =
+        '<div class="table-wrap"><table class="data-table"><thead><tr>' +
+        "<th>Order</th><th>Customer</th><th>Seller</th><th>Assignment</th><th>Value</th><th>Reassign</th>" +
+        '</tr></thead><tbody>' +
+        rows.map(({ a, o }) =>
+          "<tr>" +
+          '<td class="t-strong">' + ADMIN.esc(o.order_number) + "</td>" +
+          "<td>" + ADMIN.esc(o.full_name) + "</td>" +
+          "<td>" + ADMIN.esc(this.state.map[a.seller_id] || "—") + "</td>" +
+          '<td><span class="badge badge-green">' + ADMIN.esc(a.status) + "</span></td>" +
+          "<td>" + ADMIN.money(o.total) + "</td>" +
+          '<td><select class="select a-reassign" style="padding:.3rem .4rem;font-size:.78rem" data-id="' + a.id + '">' +
+          '<option value="">— reassign —</option>' +
+          this.state.sellers.map((s) => '<option value="' + s.id + '"' + (s.id === a.seller_id ? " selected" : "") + ">" + ADMIN.esc(s.full_name || "Seller") + "</option>").join("") +
+          "</select></td></tr>"
+        ).join("") +
+        "</tbody></table></div>";
+
+      host.querySelectorAll(".a-reassign").forEach((sel) =>
+        sel.addEventListener("change", async () => {
+          const sellerId = sel.value;
+          if (!sellerId) return;
+          const a = this.state.assignments.find((x) => x.id === sel.getAttribute("data-id"));
+          const o = this.state.orders.find((x) => x.id === a.order_id);
+          if (sellerId === a.seller_id) return;
+          if (!confirm("Reassign order " + (o ? o.order_number : "") + " to this seller?")) {
+            sel.value = "";
+            return;
+          }
+          const { error } = await sb()
+            .from("seller_assignments")
+            .update({ seller_id: sellerId, assigned_by: me.user.id, status: "assigned" })
+            .eq("id", a.id);
+          if (error) return ADMIN.toast(error.message, "error");
+          ADMIN.toast("Order reassigned", "success");
+          await this.init();
+        })
+      );
+    },
+  };
+
+  ADMIN.register("assignments", AdminPage);
+})(window);
+/* ============================================================
+   REC — Admin Stock Requests (sellers request, staff review)
+   ============================================================ */
+(function (win) {
+  "use strict";
+  const REC = (win.REC = win.REC || {});
+  const ADMIN = (win.RECAdmin = win.RECAdmin || {});
+  const sb = () => REC.supabaseClient;
+
+  const KINDS = [
+    ["add_stock", "Add stock to a product"],
+    ["correct_stock", "Correct stock discrepancy"],
+    ["new_product", "Suggest a new product"],
+    ["price_change", "Suggest a price change"],
+  ];
+
+  const AdminPage = {
+    state: { requests: [], sellers: {}, products: [] },
+
+    async init() {
+      const isSeller = REC.auth.role() === "seller";
+      document.title = (isSeller ? "My Requests | " : "Stock Requests | ") + "REC Admin";
+      ADMIN.setState();
+      const content = document.getElementById("admin-content");
+      if (!content) return;
+      const me = REC.auth.currentUser();
+
+      content.innerHTML =
+        '<div class="admin-panel"><div class="ap-head"><div><h3>Stock Requests</h3>' +
+        '<span style="font-size:.8rem;color:var(--muted)">' +
+        (isSeller
+          ? "Raise requests when stock is low or a discrepancy is found. Nothing changes until the manager approves it."
+          : "Review and approve/reject requests from sellers. Fulfill approved changes in the Inventory page.") +
+        "</span></div></div></div>" +
+        '<div class="admin-panel" style="margin-bottom:1rem"><div class="ap-body">' +
+        '<div class="grid-2" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:.6rem">' +
+        '<select class="select" id="r_kind">' + KINDS.map(([k, l]) => '<option value="' + k + '">' + l + "</option>").join("") + "</select>" +
+        '<select class="select" id="r_product"><option value="">Related product (optional)</option></select>' +
+        '<input class="input" id="r_qty" type="number" min="1" placeholder="Quantity / suggestion value" style="padding:.55rem .8rem"/>' +
+        '<input class="input" id="r_reason" placeholder="Reason / note" style="padding:.55rem .8rem"/>' +
+        '<button class="btn btn-sm btn-primary" id="r_submit">Submit request</button>' +
+        "</div></div></div>" +
+        '<div class="admin-panel"><div class="ap-head"><h3>' + (isSeller ? "My requests" : "All requests") + '</h3></div>' +
+        '<div class="ap-body" id="r_list">' + ADMIN.skeleton(6) + "</div></div>";
+
+      const [reqR, prodR, sellersR] = await Promise.all([
+        sb().from("stock_requests").select("*").order("created_at", { ascending: false }).limit(200),
+        sb().from("products").select("id, name").order("name"),
+        sb().from("profiles").select("id, full_name").in("role", ["owner", "administrator", "admin", "manager", "seller"]),
+      ]);
+      this.state.requests = reqR.data || [];
+      this.state.products = prodR.data || [];
+      (sellersR.data || []).forEach((s) => (this.state.sellers[s.id] = s.full_name || "Staff"));
+
+      const prodEl = document.getElementById("r_product");
+      prodEl.innerHTML = '<option value="">Related product (optional)</option>' +
+        this.state.products.map((p) => '<option value="' + p.id + '">' + ADMIN.esc(p.name) + "</option>").join("");
+
+      const submit = document.getElementById("r_submit");
+      submit.addEventListener("click", async () => {
+        const kind = document.getElementById("r_kind").value;
+        const productId = document.getElementById("r_product").value || null;
+        const product = this.state.products.find((p) => p.id === productId);
+        const qty = parseInt(document.getElementById("r_qty").value, 10) || null;
+        const reason = document.getElementById("r_reason").value.trim();
+        const payload = {
+          kind,
+          product_id: productId,
+          product_name: product ? product.name : null,
+          requested_qty: qty,
+          reason,
+          status: "pending",
+          requested_by: me.user.id,
+        };
+        try {
+          const { error } = await sb().from("stock_requests").insert(payload);
+          if (error) throw error;
+          ADMIN.toast("Request submitted", "success");
+          await this.init();
+        } catch (e) {
+          ADMIN.toast(e.message || "Submission failed", "error");
+        }
+      });
+
+      this.render(!isSeller);
+    },
+
+    render(canReview) {
+      const host = document.getElementById("r_list");
+      if (!this.state.requests.length) {
+        host.innerHTML = ADMIN.emptyState("No requests", "Stock and product requests appear here.");
+        return;
+      }
+      host.innerHTML =
+        '<div class="table-wrap"><table class="data-table"><thead><tr>' +
+        "<th>Type</th><th>Product</th><th>Qty</th><th>Reason</th><th>By</th><th>Date</th><th>Status</th>" +
+        (canReview ? "<th>Review</th>" : "") +
+        '</tr></thead><tbody>' +
+        this.state.requests.map((r) => {
+          const pending = r.status === "pending";
+          return "<tr>" +
+            "<td>" + ADMIN.esc(r.kind.replace(/_/g, " ")) + "</td>" +
+            "<td>" + ADMIN.esc(r.product_name || "—") + "</td>" +
+            "<td>" + (r.requested_qty != null ? r.requested_qty : "—") + "</td>" +
+            '<td style="max-width:200px">' + ADMIN.esc(r.reason || "—") + "</td>" +
+            "<td>" + ADMIN.esc(this.state.sellers[r.requested_by] || "—") + "</td>" +
+            "<td>" + ADMIN.date(r.created_at) + "</td>" +
+            '<td><span class="badge ' + (r.status === "approved" ? "green" : r.status === "rejected" ? "red" : "gold") + '">' + ADMIN.esc(r.status) + "</span></td>" +
+            (canReview
+              ? "<td>" + (pending
+                  ? '<div style="display:flex;gap:.3rem;flex-wrap:wrap">' +
+                    '<button class="btn btn-sm btn-primary" data-review="' + r.id + '" data-status="approved">Approve</button>' +
+                    '<button class="btn btn-sm btn-outline" data-review="' + r.id + '" data-status="rejected">Reject</button></div>'
+                  : '<span style="font-size:.78rem;opacity:.6">' + ADMIN.esc(r.review_note || (r.reviewed_by ? "Reviewed" : "—")) + "</span>")
+                : "") +
+            "</td></tr>";
+        }).join("") +
+        "</tbody></table></div>";
+
+      if (canReview) {
+        const me = REC.auth.currentUser();
+        host.querySelectorAll("[data-review]").forEach((btn) =>
+          btn.addEventListener("click", async () => {
+            const id = btn.getAttribute("data-review");
+            const status = btn.getAttribute("data-status");
+            const note = status === "rejected" ? prompt("Reason for rejecting this request:") : null;
+            if (status === "rejected" && note === null) return;
+            const { error } = await sb()
+              .from("stock_requests")
+              .update({ status, reviewed_by: me.user.id, review_note: note || null })
+              .eq("id", id);
+            if (error) return ADMIN.toast(error.message, "error");
+            ADMIN.toast("Request " + status, "success");
+            await this.init();
+          })
+        );
+      }
+    },
+  };
+
+  ADMIN.register("stock_requests", AdminPage);
+})(window);
+/* ============================================================
+   REC — Admin Sales / Reports (manager + seller view)
+   ============================================================ */
+(function (win) {
+  "use strict";
+  const REC = (win.REC = win.REC || {});
+  const ADMIN = (win.RECAdmin = win.RECAdmin || {});
+  const sb = () => REC.supabaseClient;
+
+  const AdminPage = {
+    async init() {
+      const isSeller = REC.auth.role() === "seller";
+      document.title = (isSeller ? "My Sales | " : "Sales Reports | ") + "REC Admin";
+      ADMIN.setState();
+      const content = document.getElementById("admin-content");
+      if (!content) return;
+      isSeller ? await this.sellerView() : await this.managerView();
+    },
+
+    async sellerView() {
+      const content = document.getElementById("admin-content");
+      content.innerHTML =
+        '<div class="admin-panel"><div class="ap-head"><div><h3>My Sales</h3>' +
+        '<span style="font-size:.8rem;color:var(--muted)">Sales from the orders currently assigned to you.</span></div></div>' +
+        '<div class="stat-grid" id="s_sale_stats"></div>' +
+        '<div class="ap-body" id="s_sale_list">' + ADMIN.skeleton(6) + "</div></div>";
+
+      const { data } = await sb()
+        .from("orders")
+        .select("id, order_number, status, payment_status, total, created_at")
+        .order("created_at", { ascending: false });
+      const orders = data || [];
+      const paid = orders.filter((o) => o.payment_status === "paid");
+      const paidValue = paid.reduce((s, o) => s + Number(o.total || 0), 0);
+      const outstanding = orders.reduce((s, o) => s + (o.payment_status !== "paid" ? Number(o.total || 0) : 0), 0);
+
+      const stats = [
+        { label: "Assigned Orders", value: orders.length },
+        { label: "Paid Orders", value: paid.length },
+        { label: "Paid Sales Value", value: ADMIN.money(paidValue) },
+        { label: "Outstanding", value: ADMIN.money(outstanding), warn: outstanding > 0 },
+      ];
+      document.getElementById("s_sale_stats").innerHTML =
+        stats.map((s) =>
+          '<div class="stat-card"><div class="sc-label">' + s.label + "</div><div class=\"sc-value\"" + (s.warn ? ' style="color:var(--danger)"' : "") + ">" + s.value + "</div></div>"
+        ).join("");
+
+      const host = document.getElementById("s_sale_list");
+      host.innerHTML = orders.length
+        ? '<div class="table-wrap"><table class="data-table"><thead><tr><th>Order</th><th>Date</th><th>Total</th><th>Payment</th><th>Status</th></tr></thead><tbody>' +
+          orders.map((o) =>
+            "<tr><td class=\"t-strong\">" + ADMIN.esc(o.order_number) + "</td><td>" + ADMIN.date(o.created_at) + "</td><td>" + ADMIN.money(o.total) + "</td>" +
+            '<td><span class="badge ' + (o.payment_status === "paid" ? "green" : "gold") + '">' + ADMIN.esc(o.payment_status || "unpaid") + "</span></td>" +
+            '<td><span class="badge badge-gray">' + ADMIN.esc(o.status) + "</span></td></tr>"
+          ).join("") + "</tbody></table></div>"
+        : ADMIN.emptyState("No assigned sales", "Sales appear here once orders are assigned to you.");
+    },
+
+    async managerView() {
+      const content = document.getElementById("admin-content");
+      content.innerHTML =
+        '<div class="admin-panel"><div class="ap-head"><div><h3>Sales Reports</h3>' +
+        '<span style="font-size:.8rem;color:var(--muted)">Revenue, payment status and per-seller sales performance.</span></div></div>' +
+        '<div class="stat-grid" id="m_sale_stats"></div>' +
+        '<div class="ap-body" id="m_sale_sellers"></div>' +
+        "</div>" +
+        '<div class="admin-panel"><div class="ap-head"><h3>Recent orders</h3></div>' +
+        '<div class="ap-body" id="m_sale_orders">' + ADMIN.skeleton(6) + "</div></div>";
+
+      const [ordersR, assignR, sellersR] = await Promise.all([
+        sb().from("orders").select("id, order_number, full_name, status, payment_status, total, created_at").order("created_at", { ascending: false }).limit(500),
+        sb().from("seller_assignments").select("order_id, seller_id"),
+        sb().from("profiles").select("id, full_name").eq("role", "seller"),
+      ]);
+      const orders = ordersR.data || [];
+      const sellers = sellersR.data || [];
+      const sellersMap = {};
+      sellers.forEach((s) => (sellersMap[s.id] = s.full_name || "Seller"));
+
+      const paid = orders.filter((o) => o.payment_status === "paid");
+      const paidValue = paid.reduce((s, o) => s + Number(o.total || 0), 0);
+      const outstanding = orders.reduce((s, o) => s + (o.payment_status !== "paid" ? Number(o.total || 0) : 0), 0);
+      const stats = [
+        { label: "All Orders", value: orders.length },
+        { label: "Paid Orders", value: paid.length },
+        { label: "Paid Revenue", value: ADMIN.money(paidValue) },
+        { label: "Outstanding", value: ADMIN.money(outstanding), warn: outstanding > 0 },
+      ];
+      document.getElementById("m_sale_stats").innerHTML =
+        stats.map((s) =>
+          '<div class="stat-card"><div class="sc-label">' + s.label + "</div><div class=\"sc-value\"" + (s.warn ? ' style="color:var(--danger)"' : "") + ">" + s.value + "</div></div>"
+        ).join("");
+
+      const perSeller = {};
+      (assignR.data || []).forEach((a) => {
+        const o = orders.find((x) => x.id === a.order_id);
+        if (!o) return;
+        if (!perSeller[a.seller_id]) perSeller[a.seller_id] = { count: 0, paid: 0, outstanding: 0 };
+        perSeller[a.seller_id].count += 1;
+        if (o.payment_status === "paid") perSeller[a.seller_id].paid += Number(o.total || 0);
+        else perSeller[a.seller_id].outstanding += Number(o.total || 0);
+      });
+      const sellerRows = Object.keys(perSeller).map((id) => Object.assign({ id }, perSeller[id]));
+      sellerRows.sort((a, b) => b.paid - a.paid);
+
+      const shost = document.getElementById("m_sale_sellers");
+      shost.innerHTML = sellerRows.length
+        ? '<div class="table-wrap"><table class="data-table"><thead><tr><th>Seller</th><th>Assigned</th><th>Paid value</th><th>Outstanding</th></tr></thead><tbody>' +
+          sellerRows.map((r) =>
+            "<tr><td class=\"t-strong\">" + ADMIN.esc(sellersMap[r.id] || "—") + "</td><td>" + r.count + "</td><td>" + ADMIN.money(r.paid) + "</td><td>" + ADMIN.money(r.outstanding) + "</td></tr>"
+          ).join("") + "</tbody></table></div>"
+        : ADMIN.emptyState("No seller assignments", "Once orders are assigned to sellers, per-seller performance appears here.");
+
+      const ohost = document.getElementById("m_sale_orders");
+      ohost.innerHTML = orders.length
+        ? '<div class="table-wrap"><table class="data-table"><thead><tr><th>Order</th><th>Customer</th><th>Total</th><th>Payment</th><th>Status</th></tr></thead><tbody>' +
+          orders.slice(0, 60).map((o) =>
+            "<tr><td class=\"t-strong\">" + ADMIN.esc(o.order_number) + "</td><td>" + ADMIN.esc(o.full_name) + "</td><td>" + ADMIN.money(o.total) + "</td>" +
+            '<td><span class="badge ' + (o.payment_status === "paid" ? "green" : "gold") + '">' + ADMIN.esc(o.payment_status || "unpaid") + "</span></td>" +
+            '<td><span class="badge badge-gray">' + ADMIN.esc(o.status) + "</span></td></tr>"
+          ).join("") + "</tbody></table></div>"
+        : ADMIN.emptyState("No orders yet", "Orders will appear here.");
+    },
+  };
+
+  ADMIN.register("sales", AdminPage);
+})(window);
+/* ============================================================
+   REC — Admin Activity Logs (audit trail)
+   ============================================================ */
+(function (win) {
+  "use strict";
+  const REC = (win.REC = win.REC || {});
+  const ADMIN = (win.RECAdmin = win.RECAdmin || {});
+  const sb = () => REC.supabaseClient;
+
+  const AdminPage = {
+    async init() {
+      document.title = "Activity Logs | REC Admin";
+      ADMIN.setState();
+      const content = document.getElementById("admin-content");
+      if (!content) return;
+
+      content.innerHTML =
+        '<div class="admin-panel"><div class="ap-head"><div><h3>Activity Logs</h3>' +
+        '<span style="font-size:.8rem;color:var(--muted)">Recent staff actions across the platform (append-only).</span></div>' +
+        '<input class="input" id="act_search" type="search" placeholder="Filter..." style="max-width:220px;padding:.55rem .8rem"/>' +
+        "</div><div class=\"ap-body\" id=\"act_list\">" + ADMIN.skeleton(8) + "</div></div>";
+
+      const [logR, staffR] = await Promise.all([
+        sb().from("activity_logs").select("id, action, entity, entity_id, actor_email, created_at").order("created_at", { ascending: false }).limit(200),
+        sb().from("profiles").select("id, full_name").in("role", ["owner", "administrator", "admin", "manager", "seller"]),
+      ]);
+      const staff = {};
+      (staffR.data || []).forEach((s) => (staff[s.id] = s.full_name));
+      const rows = logR.data || [];
+
+      const search = document.getElementById("act_search");
+      const list = document.getElementById("act_list");
+      const paint = () => {
+        const q = (search.value || "").trim().toLowerCase();
+        const filtered = rows.filter((r) =>
+          !q || (r.action || "").toLowerCase().includes(q) || (r.entity || "").toLowerCase().includes(q) || (r.actor_email || "").toLowerCase().includes(q)
+        );
+        if (!filtered.length) {
+          list.innerHTML = ADMIN.emptyState("No activity", "Staff actions across products, orders, inventory, assignments and stock requests appear here.");
+          return;
+        }
+        list.innerHTML =
+          '<div class="table-wrap"><table class="data-table"><thead><tr><th>When</th><th>Action</th><th>Entity</th><th>Record</th><th>Staff</th></tr></thead><tbody>' +
+          filtered.map((r) =>
+            "<tr><td>" + ADMIN.date(r.created_at) + "</td>" +
+            '<td style="text-transform:capitalize">' + ADMIN.esc(r.action) + "</td>" +
+            "<td>" + ADMIN.esc(r.entity || "—") + "</td>" +
+            "<td>" + ADMIN.esc(r.entity_id || "—") + "</td>" +
+            "<td>" + ADMIN.esc(r.actor_email || "—") + "</td></tr>"
+          ).join("") +
+          "</tbody></table></div>";
+      };
+      search.addEventListener("input", paint);
+      paint();
+    },
+  };
+
+  ADMIN.register("activity", AdminPage);
 })(window);
 
 window.REC_LOADED = true;

@@ -44,8 +44,19 @@
     { "source": "/rule/reviews", "destination": "/rule/reviews.html" },
     { "source": "/rule/blog", "destination": "/rule/blog.html" },
     { "source": "/rule/messages", "destination": "/rule/messages.html" },
+    { "source": "/rule/assignments", "destination": "/rule/assignments.html" },
+    { "source": "/rule/stock-requests", "destination": "/rule/stock_requests.html" },
+    { "source": "/rule/sales", "destination": "/rule/sales.html" },
+    { "source": "/rule/staff", "destination": "/rule/staff.html" },
+    { "source": "/rule/activity", "destination": "/rule/activity.html" },
+    { "source": "/rule/profile", "destination": "/rule/profile.html" },
     { "source": "/rule/settings", "destination": "/rule/settings.html" },
-    { "source": "/rule/login", "destination": "/rule/login.html" }
+    { "source": "/rule/login", "destination": "/rule/login.html" },
+
+    { "source": "/admin", "destination": "/rule/index.html" },
+    { "source": "/manager", "destination": "/rule/index.html" },
+    { "source": "/seller", "destination": "/rule/index.html" },
+    { "source": "/login", "destination": "/rule/login.html" }
   ],
   "headers": [
     {
