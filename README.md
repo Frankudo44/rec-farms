@@ -224,7 +224,7 @@ The project is fully static — no build step.
    - `SUPABASE_URL`
    - `SUPABASE_SERVICE_ROLE_KEY`
    - `PAYSTACK_SECRET_KEY`
-4. Attach your custom domain (`reclivestock.ng`), add the 
+4. Attach your custom domain (`reclivestocks.com`), add the 
    `robots.txt`/`sitemap.xml` and you're live.
 
 `vercel.json` maps every public URL onto the file that serves it and sets

@@ -14,7 +14,7 @@
   "use strict";
 
   const REC = (win.REC = win.REC || {});
-  REC.build = "2026-10-11.1";
+  REC.build = "2026-10-12.2";
 
   // Injected at build time via Vercel env (optional).
   // Falls back to values edited in this file for local dev.
@@ -40,7 +40,7 @@
     website: "",
 
     storageBucket: "rec-media",
-    site: "reclivestock.ng",
+    site: "reclivestocks.com",
 
     // Paystack (public key is safe in the browser; the SECRET key lives
     // in the Vercel serverless function api/verify-payment.js only).
@@ -3648,7 +3648,7 @@
 
   function toAbs(src) {
     if (!src) return REC.asset("images/turkey.png");
-    return /^https?:\/\//.test(src) ? src : "https://reclivestock.ng/" + src.replace(/^\//, "");
+    return /^https?:\/\//.test(src) ? src : "https://reclivestocks.com/" + src.replace(/^\//, "");
   }
 })(window);
 /* ============================================================
@@ -6745,7 +6745,7 @@ UI.toast("Welcome back, " + (cur.profile.full_name || "Admin") + "!", "success")
         '<div class="field"><label for="sf_email">Email</label><input class="input" id="sf_email"/></div>' +
         '<div class="field"><label for="sf_address">Address</label><input class="input" id="sf_address"/></div>' +
         '<div class="field full"><label for="sf_delivery_note">Delivery note</label><input class="input" id="sf_delivery_note"/></div>' +
-        '<div class="field full"><label for="sf_website">Website (URL)</label><input class="input" id="sf_website" placeholder="https://reclivestock.ng"/></div>' +
+        '<div class="field full"><label for="sf_website">Website (URL)</label><input class="input" id="sf_website" placeholder="https://reclivestocks.com"/></div>' +
         '<div class="field"><label for="sf_fb">Facebook (URL)</label><input class="input" id="sf_fb"/></div>' +
         '<div class="field"><label for="sf_ig">Instagram (URL)</label><input class="input" id="sf_ig"/></div>' +
         '<div class="field"><label for="sf_tt">TikTok (URL)</label><input class="input" id="sf_tt"/></div>' +
