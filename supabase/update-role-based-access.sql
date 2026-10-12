@@ -400,6 +400,15 @@ as $$
 declare
   v_role text;
 begin
+  -- Server-side admin paths (Paystack verifier patching payment fields,
+  -- console/migrations) act through the service role / db roles.
+  if session_user in ('postgres', 'supabase_admin') then
+    return new;
+  end if;
+  if current_user = 'service_role' then
+    return new;
+  end if;
+
   select p.role into v_role
   from public.profiles p where p.id = auth.uid();
 

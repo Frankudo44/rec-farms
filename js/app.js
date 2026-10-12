@@ -14,7 +14,7 @@
   "use strict";
 
   const REC = (win.REC = win.REC || {});
-  REC.build = "2026-10-12.2";
+  REC.build = "2026-10-12.3";
 
   // Injected at build time via Vercel env (optional).
   // Falls back to values edited in this file for local dev.
@@ -3344,8 +3344,25 @@
         localStorage.setItem('rec_last_order', JSON.stringify({ ...order, created_at: order.created_at || new Date().toISOString() }));
         REC.cart.clear();
 
-        // Confirmation page renders from rec_last_order.
-        window.location.href = REC.page("order-success") + "?ref=" + encodeURIComponent(reference);
+        const successUrl = REC.page("order-success") + "?ref=" + encodeURIComponent(reference);
+
+        // Paystack: open the inline checkout right after the order is saved.
+        // The popup itself decides the redirect (?paid=1 / ?status=pending).
+        if (REC.paystack.enabled()) {
+          try {
+            await REC.paystack.loadScript();
+          } catch (e) { /* fall through */ }
+          if (win.PaystackPop) {
+            try {
+              const ok = await REC.paystack.open(order, successUrl);
+              if (!ok) window.location.href = successUrl;
+              return;
+            } catch (errPay) {
+              console.error("Paystack error:", errPay);
+            }
+          }
+        }
+        window.location.href = successUrl;
       } catch (err) {
         UI.toast(err.message || 'Order submission failed. Please try again.', 'error');
         btn.disabled = false;
@@ -3732,20 +3749,20 @@
       if (custRow) {
         const { data, error } = await sb
           .from("orders")
-          .select("order_number, status, payment_status, total, created_at, items")
+          .select("order_number, status, payment_status, total, email, created_at, items")
           .eq("customer_id", custRow.id)
           .order("created_at", { ascending: false })
           .limit(10);
         if (error) throw error;
         orders = data || [];
       }
-      renderOrders(host, orders);
+      renderOrders(host, orders, user);
     } catch (err) {
       host.innerHTML = '<p style="font-size:.9rem;color:var(--muted)">Could not load your orders: ' + UI.esc(err.message) + "</p>";
     }
   }
 
-  function renderOrders(host, orders) {
+  function renderOrders(host, orders, user) {
     if (!orders || !orders.length) {
       host.innerHTML =
         '<div class="empty-state"><p>No orders yet. Order history links to any account you were signed into at checkout.</p></div>' +
@@ -3765,6 +3782,15 @@
       .map((o) => {
         const [cls, label] = statusMap[o.status] || ["bg-gray", o.status || "Pending"];
         const pay = o.payment_status === "paid" ? '<span class="badge badge-green">Paid</span>' : '<span class="badge badge-gold">' + UI.esc(o.payment_status || "unpaid") + "</span>";
+        const unpaid = o.payment_status !== "paid";
+        const actions =
+          REC.paystack && REC.paystack.enabled() && unpaid
+            ? '<div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-top:.7rem">' +
+              '<button class="btn btn-sm btn-primary" type="button" data-pay-now="' + UI.esc(o.order_number) + '">Pay Now</button>' +
+              '<button class="btn btn-sm btn-outline" type="button" data-pay-verify="' + UI.esc(o.order_number) + '">I\'ve Paid — Verify</button>' +
+              '<span data-pay-status="' + UI.esc(o.order_number) + '"></span>' +
+              "</div>"
+            : "";
         return (
           '<div class="pd-order-panel">' +
           '<div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:.4rem">' +
@@ -3774,10 +3800,52 @@
           '<div class="sum-row"><span>Placed</span><span>' + UI.formatDate(o.created_at) + "</span></div>" +
           '<div class="sum-row"><span>Total</span><span>' + UI.money(o.total) + "</span></div>" +
           '<div class="sum-row"><span>Payment</span><span>' + pay + "</span></div>" +
+          actions +
           "</div>"
         );
       })
       .join("");
+
+    // Payment actions (event delegation — innerHTML is rebuilt each load).
+    if (REC.paystack && REC.paystack.enabled() && !host.dataset.payBound) {
+      host.dataset.payBound = "1";
+      const statusFor = (orderNumber) =>
+        host.querySelector('[data-pay-status="' + orderNumber.replace(/"/g, "") + '"]');
+      host.addEventListener("click", (e) => {
+        const nowBtn = e.target.closest("[data-pay-now]");
+        if (nowBtn) {
+          const orderNumber = nowBtn.getAttribute("data-pay-now");
+          const order = orders.find((o) => o.order_number === orderNumber);
+          const st = statusFor(orderNumber);
+          if (!order) return;
+          nowBtn.disabled = true;
+          if (st) st.innerHTML = "Opening payment…";
+          REC.paystack.loadScript().then((loaded) => {
+            if (!loaded) {
+              if (st) st.innerHTML = "";
+              nowBtn.disabled = false;
+              UI.toast("Could not load the payment popup. Please pay via WhatsApp and verify below.", "error");
+              return;
+            }
+            REC.paystack.open(order, REC.page("account"));
+          });
+          return;
+        }
+        const verBtn = e.target.closest("[data-pay-verify]");
+        if (verBtn) {
+          const orderNumber = verBtn.getAttribute("data-pay-verify");
+          const st = statusFor(orderNumber);
+          verBtn.disabled = true;
+          if (st) st.innerHTML = "Checking…";
+          REC.paystack.verify(orderNumber, orderNumber).then((j) => {
+            verBtn.disabled = false;
+            if (st) st.innerHTML = REC.paystack.statusHTML(j);
+            if (j && j.verified) loadOrders(user);
+            else if (j && j.error) UI.toast(j.error, "error");
+          });
+        }
+      });
+    }
   }
 
   document.addEventListener("DOMContentLoaded", async () => {
@@ -3990,6 +4058,140 @@ const isPickup = order.fulfillment_method === "pickup";
   }
 })(window);
 /* ============================================================
+   REC — Paystack payments (client popup + server verification)
+   ------------------------------------------------------------
+   The popup uses only the PUBLIC key (js/app.js config). Payment
+   confirmation runs through the Vercel serverless verifier
+   (api/verify-payment.js), which holds the SECRET key and marks the
+   order paid server-side.
+   ============================================================ */
+(function (win) {
+  "use strict";
+  const REC = (win.REC = win.REC || {});
+  const UI = REC.ui;
+
+  REC.paystack = {
+    enabled() {
+      const key = REC.config.paystackKey || "";
+      return !!key && key.indexOf("pk_") === 0 && !!REC.config.paystackVerifyUrl;
+    },
+
+    /** Injects the Paystack inline checkout script exactly once. */
+    loadScript() {
+      if (win.PaystackPop) return Promise.resolve(true);
+      if (REC.paystack._scriptPromise) return REC.paystack._scriptPromise;
+      REC.paystack._scriptPromise = new Promise((resolve) => {
+        const s = document.createElement("script");
+        s.src = "https://js.paystack.co/v1/inline.js";
+        s.async = true;
+        s.onload = () => resolve(true);
+        s.onerror = () => resolve(false);
+        document.head.appendChild(s);
+      });
+      return REC.paystack._scriptPromise;
+    },
+
+    /** Calls api/verify-payment.js and resolves with the parsed result. */
+    async verify(orderNumber, reference) {
+      const api = REC.config.paystackVerifyUrl;
+      if (!api || !orderNumber || !reference) {
+        return { ok: false, error: "Payment verification is not configured yet." };
+      }
+      try {
+        const sep = api.indexOf("?") === -1 ? "?" : "&";
+        const r = await fetch(
+          api +
+            sep +
+            "order_number=" +
+            encodeURIComponent(orderNumber) +
+            "&reference=" +
+            encodeURIComponent(reference),
+          { headers: { Accept: "application/json" } }
+        );
+        const j = await r.json().catch(() => ({ ok: false, error: "Payment verification returned an invalid response." }));
+        return j || { ok: false, error: "Payment verification returned an empty response." };
+      } catch (e) {
+        return { ok: false, error: (e && e.message) || "Could not verify payment." };
+      }
+    },
+
+    /**
+     * Opens the Paystack checkout for an order. On success the server
+     * verifier marks the order paid (or confirms it already was) and the
+     * visitor is sent to redirectTo with ?paid=1 / ?status=pending.
+     * Resolves true only when payment was verified.
+     */
+    open(order, redirectTo) {
+      const pop = win.PaystackPop;
+      const amount = Math.round(Number(order.total || 0) * 100);
+      if (!REC.paystack.enabled() || !pop || !(amount > 0)) {
+        return Promise.resolve(false);
+      }
+      return new Promise((resolve) => {
+        let settled = false;
+        const done = (ok) => {
+          if (settled) return;
+          settled = true;
+          resolve(ok);
+        };
+        const redirect = (flag) => {
+          if (!redirectTo) return;
+          const sep = redirectTo.indexOf("?") === -1 ? "?" : "&";
+          window.location.href = redirectTo + sep + flag;
+        };
+        let handler;
+        try {
+          handler = pop.setup({
+            key: REC.config.paystackKey,
+            email: order.email || "",
+            amount,
+            currency: "NGN",
+            ref: order.order_number,
+            metadata: {
+              order_number: order.order_number,
+              custom_fields: [
+                { display_name: "Order", variable_name: "order_number", value: order.order_number },
+              ],
+            },
+            onSuccess: async (t) => {
+              if (handler) handler.closeIframe();
+              let ok = false;
+              try {
+                const j = await REC.paystack.verify(order.order_number, t.reference);
+                ok = !!(j && j.verified);
+              } catch (err) {
+                ok = false;
+              }
+              redirect(ok ? "paid=1" : "status=pending");
+              done(ok);
+            },
+            onCancel: () => {
+              redirect("status=pending");
+              done(false);
+            },
+          });
+          handler.openIframe();
+        } catch (err) {
+          console.error("Paystack open failed:", err);
+          redirect("status=pending");
+          done(false);
+        }
+      });
+    },
+
+    /** Small badge showing the outcome of a verification call. */
+    statusHTML(result) {
+      if (result && result.verified) {
+        return '<span class="badge badge-green">Paid — thank you!</span>';
+      }
+      const reason = (result && (result.reason || result.error)) || "not confirmed";
+      return '<span class="badge badge-gold">' + UI.esc(String(reason).replace(/_/g, " ")) + "</span>";
+    },
+  };
+
+  win.REC = REC;
+})(window);
+/* ============================================================
    REC — Order confirmation page
    ============================================================ */
 (function (win) {
@@ -4027,6 +4229,55 @@ const isPickup = order.fulfillment_method === "pickup";
           "Pickup is free — bring your order reference (" + reference + ").";
         box.hidden = false;
       }
+    }
+
+    // Paystack: Pay Now button + "I've paid — confirm" once payment exists.
+    const payBox = $("confirm_pay");
+    if (payBox && order && Number(order.total) > 0 && REC.paystack.enabled()) {
+      $("pay_amount").textContent = UI.money(order.total);
+      payBox.hidden = false;
+      const qs = UI.qs();
+      const paidFlag = qs.get("paid") === "1";
+      const payNow = $("pay_now");
+      const payVerify = $("pay_verify");
+      const payStatus = $("pay_status");
+
+      if (paidFlag) {
+        payStatus.innerHTML = '<span class="badge badge-green">Payment received — we will confirm your order shortly.</span>';
+        payNow.style.display = "none";
+        payVerify.style.display = "none";
+      } else if (qs.get("status") === "pending") {
+        payStatus.innerHTML = '<span class="badge badge-gold">Payment was not completed. You can pay now or transfer manually and tap confirm below.</span>';
+      }
+
+      REC.paystack.loadScript();
+      payNow.addEventListener("click", async () => {
+        payNow.disabled = true;
+        const loaded = await REC.paystack.loadScript();
+        if (!loaded) {
+          payNow.disabled = false;
+          UI.toast("Could not load the payment popup. Please pay via WhatsApp and confirm below.", "error");
+          return;
+        }
+        REC.paystack.open(order, REC.page("order-success") + "?ref=" + encodeURIComponent(reference || ""));
+      });
+      payVerify.addEventListener("click", async () => {
+        const orderNumber = reference || (order && order.order_number);
+        payVerify.disabled = true;
+        payVerify.textContent = "Checking…";
+        const j = await REC.paystack.verify(orderNumber, orderNumber);
+        payVerify.disabled = false;
+        payVerify.textContent = "I've paid — confirm";
+        payStatus.innerHTML = REC.paystack.statusHTML(j);
+        if (j && j.verified) {
+          payNow.style.display = "none";
+          payVerify.style.display = "none";
+          order.payment_status = "paid";
+          localStorage.setItem("rec_last_order", JSON.stringify(order));
+        } else if (j && j.error) {
+          UI.toast(j.error, "error");
+        }
+      });
     }
   });
 })(window);
@@ -6926,6 +7177,7 @@ UI.toast("Welcome back, " + (cur.profile.full_name || "Admin") + "!", "success")
       document.getElementById("o_search").addEventListener("input", (e) => { this.state.search = e.target.value; this.render(); });
       document.getElementById("o_list").addEventListener("change", (e) => this.onStatus(e));
       document.getElementById("o_list").addEventListener("click", (e) => this.onDetail(e));
+      document.getElementById("o_list").addEventListener("click", (e) => this.onVerify(e));
     },
 
     async load() {
@@ -6975,7 +7227,11 @@ UI.toast("Welcome back, " + (cur.profile.full_name || "Admin") + "!", "success")
                 "<td>" + ADMIN.date(o.created_at) + "</td>" +
                 '<td><select class="select o-status" style="padding:.35rem .5rem;font-size:.8rem" data-id="' + o.id + '">' +
                 optAll.replace('<option value="' + ADMIN.esc(o.status) + '">', '<option value="' + ADMIN.esc(o.status) + '" selected>') +
-                "</select></td>" +
+                "</select>" +
+                (isSeller || o.payment_status === "paid"
+                  ? ""
+                  : '<div style="margin-top:.35rem"><button class="btn btn-sm btn-outline o-verify" type="button" data-id="' + o.id + '" data-ref="' + ADMIN.esc(o.order_number) + '">Verify payment</button></div>') +
+                "</td>" +
                 "</tr>"
               );
             }
@@ -6999,6 +7255,33 @@ UI.toast("Welcome back, " + (cur.profile.full_name || "Admin") + "!", "success")
       } catch (err) {
         sel.value = prev.status;
         ADMIN.toast(err.message || "Update failed", "error");
+      }
+    },
+
+    async onVerify(e) {
+      const btn = e.target.closest(".o-verify");
+      if (!btn || btn.disabled) return;
+      const order = this.state.orders.find((o) => o.id === btn.getAttribute("data-id"));
+      if (!order) return;
+      btn.disabled = true;
+      const original = btn.textContent;
+      btn.textContent = "Checking…";
+      try {
+        const j = await REC.paystack.verify(order.order_number, order.order_number);
+        if (j && j.verified) {
+          ADMIN.toast("Payment verified for " + order.order_number, "success");
+          await this.load();
+        } else {
+          ADMIN.toast(
+            "Not paid or not found: " + ((j && (j.reason || j.error)) || "unknown"),
+            "error"
+          );
+        }
+      } catch (err) {
+        ADMIN.toast(err.message || "Verification failed", "error");
+      } finally {
+        btn.disabled = false;
+        btn.textContent = original;
       }
     },
 

@@ -8,7 +8,7 @@
   <link rel="icon" href="../assets/logo/rec-logo.jpg"/>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
-    <link rel="stylesheet" href="../css/style.css?v=2026-10-12.2">
+    <link rel="stylesheet" href="../css/style.css?v=2026-10-12.3">
 </head>
 <body>
 
@@ -30,6 +30,15 @@
             <p><strong id="pickup_name"></strong></p>
             <p id="pickup_address" style="margin-bottom:.3rem"></p>
             <p style="font-size:.88rem;color:var(--muted)" id="pickup_hours"></p>
+          </div>
+          <div class="confirm-pay" id="confirm_pay" hidden>
+            <h2>Payment</h2>
+            <p style="font-size:.9rem;color:var(--muted)">Amount due: <strong id="pay_amount"></strong></p>
+            <div id="pay_status"></div>
+            <div style="display:flex;gap:.6rem;flex-wrap:wrap;justify-content:center;margin-top:.8rem">
+              <button class="btn btn-primary" id="pay_now" type="button">Pay Now with Paystack</button>
+              <button class="btn btn-outline" id="pay_verify" type="button">I've paid — confirm</button>
+            </div>
           </div>
           <p style="font-size:.9rem">We'll confirm your order shortly on <strong>WhatsApp</strong> or by <strong>phone</strong>.</p>
           <div style="display:flex;gap:.8rem;flex-wrap:wrap;justify-content:center;margin-top:1.6rem">
@@ -54,7 +63,8 @@
   </a>
 
   
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
-    <script src="../js/app.js?v=2026-10-11.1"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <script src="https://js.paystack.co/v1/inline.js"></script>
+  <script src="../js/app.js?v=2026-10-12.3"></script>
 </body>
 </html>
