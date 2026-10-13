@@ -16,7 +16,7 @@ const ANON_KEY =
   process.env.SUPABASE_ANON_KEY ||
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml5eXhidmZxcmZ2ZGF0a2Z2dHl4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTAxNzQxNDQsImV4cCI6MjEwNTc1MDE0NH0.xBqeJY3QoRlSJYL6J8-EocvZGLn5eaMulMl97aO9nFY";
 
-const SITE = "https://reclivestocks.com";
+const SITE = "https://rec-farms.com";
 const TODAY = new Date().toISOString().slice(0, 10);
 
 /* These are the PUBLIC paths (kept stable by the rewrites in
