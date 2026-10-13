@@ -3785,4 +3785,101 @@ body:not(.admin-body) .pd-meta strong {
   font-style: italic;
 }
 
+/* ============================================================
+   Admin notification bell + dropdown
+   ============================================================ */
+.admin-bell {
+  padding: 0.5rem 0.6rem;
+  line-height: 0;
+}
+.admin-bell:hover {
+  border-color: var(--rec-green);
+  color: var(--rec-green);
+}
+.bell-count {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: var(--r-pill);
+  background: var(--danger);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 18px;
+  text-align: center;
+  place-items: center;
+  box-shadow: 0 0 0 2px #fff;
+}
+.notif-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(330px, 88vw);
+  max-height: 420px;
+  overflow-y: auto;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-lg);
+  z-index: 60;
+}
+.notif-panel[hidden] {
+  display: none;
+}
+.notif-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.75rem 0.9rem;
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  background: #fff;
+}
+.notif-head strong {
+  font-size: 0.9rem;
+}
+.notif-item {
+  display: block;
+  padding: 0.7rem 0.9rem;
+  border-bottom: 1px solid var(--line);
+  text-decoration: none;
+  color: inherit;
+}
+.notif-item:last-child {
+  border-bottom: 0;
+}
+.notif-item:hover {
+  background: var(--rec-green-tint);
+}
+.notif-item.unread {
+  background: #fbfdf9;
+  border-left: 3px solid var(--rec-green-soft);
+}
+.notif-item .ni-title {
+  font-weight: 700;
+  font-size: 0.86rem;
+  color: var(--ink);
+}
+.notif-item .ni-body {
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-top: 2px;
+}
+.notif-item .ni-date {
+  font-size: 0.72rem;
+  color: var(--muted);
+  margin-top: 4px;
+}
+.notif-empty {
+  padding: 1.4rem 1rem;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
 

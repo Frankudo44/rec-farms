@@ -95,6 +95,8 @@
     checkout: "pages/checkout.html",
     "order-success": "pages/order-success.html",
     account: "pages/account.html",
+    quote: "pages/quote.html",
+    "farm-visit": "pages/farm-visit.html",
     privacy: "pages/privacy.html",
     terms: "pages/terms.html",
     notFound: "pages/404.html",
@@ -368,6 +370,23 @@
       REC.config.supabaseUrl,
       REC.config.supabaseAnonKey
     );
+
+    /* Surface an expired/invalidated session instead of silently dropping the
+       user. Supabase emits SIGNED_OUT when a background token refresh fails
+       (e.g. the project was paused or the network dropped). */
+    try {
+      REC.supabaseClient.auth.onAuthStateChange((event) => {
+        if (event === "SIGNED_OUT") {
+          const had = localStorage.getItem("rec_user");
+          localStorage.removeItem("rec_user");
+          localStorage.removeItem("rec_session");
+          if (had && !REC._signingOut && REC.ui && REC.ui.toast) {
+            REC.ui.toast("Your session expired — please sign in again.", "info");
+          }
+        }
+      });
+    } catch (e) {}
+
     return REC.supabaseClient;
   };
 })(window);
@@ -953,10 +972,15 @@
     },
 
     async signOut() {
-      const { error } = await REC.supabaseClient.auth.signOut();
-      localStorage.removeItem(AUTH_KEY);
-      localStorage.removeItem(SESSION_KEY);
-      if (error && !error.message.includes("No session")) throw error;
+      REC._signingOut = true;
+      try {
+        const { error } = await REC.supabaseClient.auth.signOut();
+        localStorage.removeItem(AUTH_KEY);
+        localStorage.removeItem(SESSION_KEY);
+        if (error && !error.message.includes("No session")) throw error;
+      } finally {
+        REC._signingOut = false;
+      }
     },
 
     async getProfile(userId) {
@@ -1372,6 +1396,8 @@
     { href: REC.page("shop"), label: "Shop" },
     { href: REC.page("about"), label: "About Us" },
     { href: REC.page("contact"), label: "Our Farms" },
+    { href: REC.page("quote"), label: "Bulk Orders" },
+    { href: REC.page("farm-visit"), label: "Farm Visits" },
     { href: REC.page("blog"), label: "Blog" },
     { href: REC.page("contact"), label: "Contact" },
   ];
@@ -1619,6 +1645,8 @@
         ["Shop", REC.page("shop")],
         ["About Us", REC.page("about")],
         ["Our Farms", REC.page("contact")],
+        ["Bulk Orders", REC.page("quote")],
+        ["Farm Visits", REC.page("farm-visit")],
         ["Blog", REC.page("blog")],
         ["Contact", REC.page("contact")],
       ]
@@ -3519,6 +3547,143 @@
   });
 })(window);
 /* ============================================================
+   REC — Bulk quote & farm visit request forms
+   ============================================================ */
+(function (win) {
+  "use strict";
+  const REC = (win.REC = win.REC || {});
+  const UI = REC.ui;
+
+  function $(s) {
+    return document.querySelector(s);
+  }
+
+  function wireRequestForm(opts) {
+    const link = $("#" + opts.waLink);
+    if (link) link.href = REC.whatsapp.general();
+    const form = $("#" + opts.formId);
+    if (!form) return;
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+
+      const hp = form.querySelector(".hp-field input");
+      if (hp && hp.value.trim()) return;
+
+      const lastKey = "rec_" + opts.table + "_last";
+      const last = Number(localStorage.getItem(lastKey) || 0);
+      if (Date.now() - last < 90000) {
+        UI.toast("Please wait a moment before sending another request.", "info");
+        return;
+      }
+
+      const payload = opts.payload();
+      if (!payload) return;
+
+      const btn = $("#" + opts.btnId);
+      const original = btn.innerHTML;
+      btn.disabled = true;
+      btn.textContent = "Sending…";
+
+      const client = REC.supabaseClient;
+      if (client) {
+        try {
+          const { error } = await client.from(opts.table).insert(payload);
+          if (error) throw error;
+          form.reset();
+          localStorage.setItem(lastKey, String(Date.now()));
+          UI.toast(opts.okMsg, "success");
+          btn.disabled = false;
+          btn.innerHTML = original;
+          return;
+        } catch (err) {
+          console.error(opts.table + " insert failed:", err.message);
+        }
+      }
+
+      window.open(REC.whatsapp.general(opts.waMsg(payload)), "_blank", "noopener");
+      UI.toast("Opening WhatsApp — please send the pre-filled message.", "info");
+      btn.disabled = false;
+      btn.innerHTML = original;
+    });
+  }
+
+  document.addEventListener("DOMContentLoaded", () => {
+    REC.initSupabase();
+
+    const params = new URLSearchParams(location.search);
+    const qProductEl = $("#q_product");
+    if (qProductEl && params.get("product")) qProductEl.value = params.get("product");
+
+    wireRequestForm({
+      waLink: "q_wa_link",
+      table: "bulk_quote_requests",
+      formId: "quote_form",
+      btnId: "q_submit",
+      okMsg: "Thank you! Your quote request has reached the REC team.",
+      payload: () => {
+        const name = $("#q_name").value.trim();
+        const phone = $("#q_phone").value.trim();
+        if (!name || !phone) {
+          UI.toast("Please fill your name and phone.", "error");
+          return null;
+        }
+        return {
+          name,
+          phone,
+          email: $("#q_email").value.trim() || null,
+          product_id: params.get("product_id") || null,
+          product_name: $("#q_product").value.trim() || null,
+          quantity: Number($("#q_quantity").value || 1),
+          preferred_date: $("#q_date").value || null,
+          location: $("#q_location").value.trim() || null,
+          requirements: $("#q_requirements").value.trim() || null,
+          source: "quote",
+        };
+      },
+      waMsg: (p) =>
+        "Hello REC Livestock & Agro Farms,\nI'd like a bulk quote.\n" +
+        "Name: " + p.name + "\nPhone: " + p.phone +
+        (p.product_name ? "\nProduct: " + p.product_name : "") +
+        (p.quantity ? "\nQuantity: " + p.quantity : "") +
+        (p.location ? "\nLocation: " + p.location : "") +
+        (p.requirements ? "\nRequirements: " + p.requirements : ""),
+    });
+
+    wireRequestForm({
+      waLink: "v_wa_link",
+      table: "farm_visit_bookings",
+      formId: "farm_visit_form",
+      btnId: "v_submit",
+      okMsg: "Thank you! We'll confirm your farm visit shortly.",
+      payload: () => {
+        const name = $("#v_name").value.trim();
+        const phone = $("#v_phone").value.trim();
+        if (!name || !phone) {
+          UI.toast("Please fill your name and phone.", "error");
+          return null;
+        }
+        return {
+          name,
+          phone,
+          email: $("#v_email").value.trim() || null,
+          preferred_date: $("#v_date").value || null,
+          preferred_time: $("#v_time").value.trim() || null,
+          visitors: Number($("#v_visitors").value || 1),
+          purpose: $("#v_purpose").value.trim() || null,
+        };
+      },
+      waMsg: (p) =>
+        "Hello REC Livestock & Agro Farms,\nI'd like to book a farm visit.\n" +
+        "Name: " + p.name + "\nPhone: " + p.phone +
+        (p.preferred_date ? "\nPreferred date: " + p.preferred_date : "") +
+        (p.preferred_time ? "\nPreferred time: " + p.preferred_time : "") +
+        "\nVisitors: " + p.visitors +
+        (p.purpose ? "\nPurpose: " + p.purpose : ""),
+    });
+  });
+})(window);
+/* ============================================================
    REC — Blog listing
    ============================================================ */
 (function (win) {
@@ -4305,7 +4470,12 @@ const NAV = [
     { key: "products", label: "Products", icon: "i-box", href: REC.admin("products.html"), group: "Catalogs", perm: "products" },
     { key: "categories", label: "Categories", icon: "i-layers", href: REC.admin("categories.html"), group: "Catalogs", perm: "categories" },
     { key: "inventory", label: "Inventory", icon: "i-database", href: REC.admin("inventory.html"), group: "Catalogs", perm: "inventory" },
+    { key: "batches", label: "Product Batches", icon: "i-package", href: REC.admin("batches.html"), group: "Catalogs", perm: "batches" },
+    { key: "movements", label: "Stock Movements", icon: "i-arrow-left", href: REC.admin("movements.html"), group: "Catalogs", perm: "inventory" },
     { key: "customers", label: "Customers", icon: "i-users", href: REC.admin("customers.html"), group: "Catalogs", perm: "customers" },
+    { key: "bulk_requests", label: "Bulk Requests", icon: "i-clipboard", href: REC.admin("bulk_requests.html"), count: true, group: "Operations", perm: "orders" },
+    { key: "farm_visits", label: "Farm Visits", icon: "i-map-pin", href: REC.admin("farm_visits.html"), count: true, group: "Operations", perm: "delivery" },
+    { key: "quotations", label: "Quotations", icon: "i-file", href: REC.admin("quotations.html"), group: "Operations", perm: "orders" },
     { key: "delivery", label: "Delivery", icon: "i-truck", href: REC.admin("delivery.html"), group: "Operations", perm: "delivery" },
     { key: "pickups", label: "Pickups", icon: "i-map-pin", href: REC.admin("pickups.html"), group: "Operations", perm: "delivery" },
     { key: "assignments", label: "Seller Assignments", icon: "i-users", href: REC.admin("assignments.html"), group: "Operations", perm: "assignments" },
@@ -4325,13 +4495,15 @@ const NAV = [
      manager gets operations + content; seller gets assigned-work views). */
   const ROLE_NAV = {
     full: [
-      "dashboard", "orders", "products", "categories", "inventory", "customers",
+      "dashboard", "orders", "products", "categories", "inventory", "batches", "movements", "customers",
+      "bulk_requests", "farm_visits", "quotations",
       "delivery", "pickups", "assignments", "stock_requests",
       "testimonials", "reviews", "blog", "messages", "sales",
       "staff", "activity", "profile", "settings",
     ],
     manager: [
-      "dashboard", "orders", "products", "categories", "inventory", "customers",
+      "dashboard", "orders", "products", "categories", "inventory", "batches", "movements", "customers",
+      "bulk_requests", "farm_visits", "quotations",
       "assignments", "stock_requests", "testimonials", "reviews", "blog", "messages",
       "sales", "activity", "staff", "profile",
     ],
@@ -4540,7 +4712,13 @@ const NAV = [
       '<button type="button" class="btn btn-outline mb-toggle" id="mb-toggle" aria-label="Open menu">' +
       '<svg aria-hidden="true" style="width:20px;height:20px"><use href="../assets/icons/sprite.svg#i-menu"></use></svg></button>' +
       "<h1 id=\"page-title\"></h1>" +
+      '<div style="margin-left:auto;display:flex;align-items:center;gap:.5rem;position:relative">' +
+      '<button type="button" class="btn btn-outline admin-bell" id="admin-bell" aria-label="Notifications" aria-haspopup="true" style="position:relative">' +
+      '<svg aria-hidden="true" style="width:20px;height:20px"><use href="../assets/icons/sprite.svg#i-bell"></use></svg>' +
+      '<span class="bell-count" id="bell-count" style="display:none"></span></button>' +
       '<a class="btn btn-sm btn-outline" href="../index.html" target="_blank">View Website</a>' +
+      '<div class="notif-panel" id="notif-panel" hidden></div>' +
+      "</div>" +
       "</div>" +
       '<div id="admin-content"></div>' +
       "</div>";
@@ -4569,6 +4747,85 @@ const NAV = [
         });
       }
     }
+
+    if (ADMIN.initBell) ADMIN.initBell();
+  };
+
+  /* Admin notification bell: reads the `notifications` table (audience='admin',
+     written by DB triggers) and shows unread count + a dropdown. Clicking an
+     item marks it read and follows its link. */
+  ADMIN.initBell = function () {
+    const bell = document.getElementById("admin-bell");
+    const panel = document.getElementById("notif-panel");
+    const badge = document.getElementById("bell-count");
+    if (!bell || !panel || !REC.supabaseClient) return;
+    let rows = [];
+
+    const paint = () => {
+      const unread = rows.filter((r) => !r.read).length;
+      if (badge) {
+        badge.textContent = unread;
+        badge.style.display = unread > 0 ? "grid" : "none";
+      }
+      panel.innerHTML =
+        '<div class="notif-head"><strong>Notifications</strong>' +
+        (rows.length ? '<button class="btn btn-sm btn-outline" id="notif_readall">Mark all read</button>' : "") +
+        "</div>" +
+        (rows.length
+          ? rows
+              .map((r) => {
+                const href = r.link ? String(r.link).replace(/^\/?rule\//, "") : "#";
+                return (
+                  '<a class="notif-item' + (r.read ? "" : " unread") + '" href="' + ADMIN.esc(href) + '" data-nid="' + r.id + '">' +
+                  '<div class="ni-title">' + ADMIN.esc(r.title || "Notification") + "</div>" +
+                  (r.body ? '<div class="ni-body">' + ADMIN.esc(r.body) + "</div>" : "") +
+                  '<div class="ni-date">' + ADMIN.date(r.created_at) + "</div></a>"
+                );
+              })
+              .join("")
+          : '<div class="notif-empty">No notifications yet</div>');
+      const all = document.getElementById("notif_readall");
+      if (all) all.addEventListener("click", (e) => { e.preventDefault(); markAll(); });
+    };
+
+    const load = async () => {
+      try {
+        const { data, error } = await REC.supabaseClient
+          .from("notifications")
+          .select("id,title,body,link,read,created_at")
+          .eq("audience", "admin")
+          .order("created_at", { ascending: false })
+          .limit(25);
+        if (!error) rows = data || [];
+      } catch (e) {}
+      paint();
+    };
+
+    const markAll = async () => {
+      try {
+        await REC.supabaseClient.from("notifications").update({ read: true }).eq("audience", "admin").eq("read", false);
+        await load();
+      } catch (e) {}
+    };
+
+    bell.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const open = !panel.hidden;
+      panel.hidden = open;
+      if (!open) load();
+    });
+    panel.addEventListener("click", async (e) => {
+      const item = e.target.closest("[data-nid]");
+      if (!item) return;
+      e.preventDefault();
+      const id = item.getAttribute("data-nid");
+      try { await REC.supabaseClient.from("notifications").update({ read: true }).eq("id", id); } catch (er) {}
+      const href = item.getAttribute("href");
+      if (href && href !== "#") location.href = href;
+      else load();
+    });
+    document.addEventListener("click", () => { if (!panel.hidden) panel.hidden = true; });
+    load();
   };
 
   ADMIN.setState = function () {
@@ -7099,7 +7356,7 @@ UI.toast("Welcome back, " + (cur.profile.full_name || "Admin") + "!", "success")
         '<div class="admin-panel" style="margin-top:1rem"><div class="ap-head"><h3>Env configuration</h3></div><div class="ap-body">' +
         '<div class="env-box"><code>SUPABASE_URL</code><span>' + ADMIN.esc(REC.config.supabaseUrl || "not set") + "</span></div>" +
         '<div class="env-box"><code>SUPABASE_ANON_KEY</code><span>' + (REC.config.supabaseAnonKey && REC.config.supabaseAnonKey !== "YOUR_SUPABASE_ANON_KEY" ? "configured (anon key)" : ADMIN.esc(REC.config.supabaseAnonKey || "not set")) + "</span></div>" +
-        '<p class="hint" style="margin-top:.6rem">Diretions: set these in <b>js/app.js</b> for local dev, or as Vercel env vars for production. The public site uses only the anon key; never expose your service role key.</p>' +
+        '<p class="hint" style="margin-top:.6rem">Directions: set these in <b>js/app.js</b> for local dev, or as Vercel env vars for production. The public site uses only the anon key; never expose your service role key.</p>' +
         "</div></div>" +
         (low.length
           ? '<div class="admin-panel" style="margin-top:1rem"><div class="ap-head"><h3>Low Stock Alerts</h3></div><div class="ap-body">' +
@@ -8103,6 +8360,836 @@ UI.toast("Welcome back, " + (cur.profile.full_name || "Admin") + "!", "success")
   };
 
   ADMIN.register("activity", AdminPage);
+})(window);
+/* ============================================================
+   REC — Admin Bulk Requests (bulk_quote_requests)
+   ============================================================ */
+(function (win) {
+  "use strict";
+  const REC = (win.REC = win.REC || {});
+  const ADMIN = (win.RECAdmin = win.RECAdmin || {});
+  const sb = () => REC.supabaseClient;
+  const STATUS = {
+    new: ["badge-gold", "New"],
+    responded: ["badge-green", "Responded"],
+    closed: ["badge-gray", "Closed"],
+  };
+
+  const AdminPage = {
+    state: { rows: [], filter: "all" },
+
+    async init() {
+      document.title = "Bulk Requests | REC Admin";
+      ADMIN.setState();
+      const content = document.getElementById("admin-content");
+      if (!sb()) return (content.innerHTML = ADMIN.emptyState("No connection", "Connect Supabase first."));
+
+      content.innerHTML =
+        '<div class="admin-panel"><div class="ap-head"><div><h3>Bulk Requests</h3>' +
+        '<span style="font-size:.8rem;color:var(--muted)">Bulk orders &amp; product enquiries submitted from the website.</span></div>' +
+        '<select class="select" id="br_filter" style="max-width:170px">' +
+        '<option value="all">All statuses</option><option value="new">New</option>' +
+        '<option value="responded">Responded</option><option value="closed">Closed</option></select></div>' +
+        '<div class="ap-body" id="br_list">' + ADMIN.skeleton(6) + "</div></div>";
+
+      document.getElementById("br_filter").addEventListener("change", (e) => { this.state.filter = e.target.value; this.render(); });
+      document.getElementById("br_list").addEventListener("click", (e) => this.onClick(e));
+      await this.load();
+    },
+
+    async load() {
+      const { data, error } = await sb().from("bulk_quote_requests").select("*").order("created_at", { ascending: false }).limit(300);
+      if (error) return ADMIN.toast(error.message, "error");
+      this.state.rows = data || [];
+      ADMIN.setCount("bulk_requests", this.state.rows.filter((r) => r.status === "new").length);
+      this.render();
+    },
+
+    render() {
+      const host = document.getElementById("br_list");
+      let list = this.state.rows;
+      if (this.state.filter !== "all") list = list.filter((r) => r.status === this.state.filter);
+      if (!list.length) {
+        host.innerHTML = ADMIN.emptyState("No requests", "Bulk quote requests from the storefront arrive here.");
+        return;
+      }
+      host.innerHTML =
+        '<div class="table-wrap"><table class="data-table"><thead><tr>' +
+        "<th>Date</th><th>Customer</th><th>Product</th><th>Qty</th><th>Status</th><th>Actions</th>" +
+        "</tr></thead><tbody>" +
+        list.map((r) => {
+          const st = STATUS[r.status] || ["badge-gray", r.status || "—"];
+          return "<tr>" +
+            "<td>" + ADMIN.date(r.created_at) + "</td>" +
+            '<td class="t-strong">' + ADMIN.esc(r.name) +
+            '<div style="font-size:.78rem;color:var(--muted)">' + ADMIN.esc(r.phone || "") + (r.email ? " · " + ADMIN.esc(r.email) : "") + "</div></td>" +
+            "<td>" + ADMIN.esc(r.product_name || "—") + "</td>" +
+            "<td>" + (r.quantity || 1) + "</td>" +
+            '<td><span class="badge ' + st[0] + '">' + st[1] + "</span></td>" +
+            '<td><div style="display:flex;gap:.35rem;flex-wrap:wrap">' +
+            '<button class="btn btn-sm btn-outline" data-view="' + r.id + '">View</button>' +
+            (r.status !== "responded" ? '<button class="btn btn-sm btn-outline" data-set="responded" data-id="' + r.id + '">Responded</button>' : "") +
+            (r.status !== "closed" ? '<button class="btn btn-sm btn-outline" data-set="closed" data-id="' + r.id + '">Close</button>' : "") +
+            '<button class="btn btn-sm btn-primary" data-quote="' + r.id + '">Create Quote</button>' +
+            '<button class="btn btn-sm btn-outline" data-del="' + r.id + '">Delete</button>' +
+            "</div></td></tr>";
+        }).join("") +
+        "</tbody></table></div>";
+    },
+
+    async onClick(e) {
+      const set = e.target.closest("[data-set]");
+      const del = e.target.closest("[data-del]");
+      const view = e.target.closest("[data-view]");
+      const quote = e.target.closest("[data-quote]");
+      try {
+        if (set) {
+          const { error } = await sb().from("bulk_quote_requests").update({ status: set.getAttribute("data-set") }).eq("id", set.getAttribute("data-id"));
+          if (error) throw error;
+          ADMIN.toast("Status updated", "success");
+          await this.load();
+        } else if (del) {
+          if (!confirm("Delete this request?")) return;
+          const { error } = await sb().from("bulk_quote_requests").delete().eq("id", del.getAttribute("data-del"));
+          if (error) throw error;
+          ADMIN.toast("Request deleted", "success");
+          await this.load();
+        } else if (view) {
+          this.view(await this.find(view.getAttribute("data-view")));
+        } else if (quote) {
+          await this.toQuote(await this.find(quote.getAttribute("data-quote")));
+        }
+      } catch (err) {
+        ADMIN.toast(err.message || "Action failed", "error");
+      }
+    },
+
+    find(id) {
+      return this.state.rows.find((r) => r.id === id);
+    },
+
+    view(r) {
+      if (!r) return;
+      let modal = document.getElementById("br_modal");
+      if (!modal) { modal = document.createElement("div"); modal.className = "modal-root"; modal.id = "br_modal"; document.body.appendChild(modal); }
+      modal.innerHTML =
+        '<div class="modal-backdrop" data-close></div>' +
+        '<div class="modal-card" role="dialog" aria-modal="true">' +
+        '<button class="modal-close" data-close aria-label="Close"><svg><use href="' + REC.sprite("i-close") + '"></use></svg></button>' +
+        "<h3>Bulk Request</h3>" +
+        '<div class="pd-meta-grid" style="grid-template-columns:1fr 1fr;gap:.6rem">' +
+        "<div><strong>Name</strong><span>" + ADMIN.esc(r.name) + "</span></div>" +
+        "<div><strong>Phone</strong><span>" + ADMIN.esc(r.phone || "—") + "</span></div>" +
+        "<div><strong>Email</strong><span>" + ADMIN.esc(r.email || "—") + "</span></div>" +
+        "<div><strong>Product</strong><span>" + ADMIN.esc(r.product_name || "—") + "</span></div>" +
+        "<div><strong>Quantity</strong><span>" + (r.quantity || 1) + "</span></div>" +
+        "<div><strong>Preferred date</strong><span>" + ADMIN.esc(r.preferred_date || "—") + "</span></div>" +
+        "<div><strong>Location</strong><span>" + ADMIN.esc(r.location || "—") + "</span></div>" +
+        "<div><strong>Source</strong><span>" + ADMIN.esc(r.source || "—") + "</span></div>" +
+        "</div>" +
+        '<div style="margin-top:.8rem"><strong>Requirements</strong><p>' + ADMIN.esc(r.requirements || "—") + "</p></div>" +
+        '<div class="form-actions"><button class="btn btn-outline" data-close>Close</button></div></div>';
+      modal.classList.add("open");
+      modal.querySelectorAll("[data-close]").forEach((el) => el.addEventListener("click", () => modal.classList.remove("open")));
+    },
+
+    async toQuote(r) {
+      if (!r) return;
+      try {
+        const subtotal = 0;
+        const { data, error } = await sb().from("quotations").insert({
+          customer_name: r.name,
+          phone: r.phone,
+          email: r.email || null,
+          status: "draft",
+          subtotal,
+          delivery_fee: 0,
+          total: subtotal,
+          notes: "From bulk request #" + r.id + (r.requirements ? " — " + r.requirements : ""),
+        }).select("id").single();
+        if (error) throw error;
+        if (data && data.id && r.product_name) {
+          await sb().from("quotation_items").insert({
+            quotation_id: data.id,
+            product_id: r.product_id || null,
+            name: r.product_name,
+            quantity: r.quantity || 1,
+            unit_price: 0,
+            subtotal: 0,
+          });
+        }
+        await sb().from("bulk_quote_requests").update({ status: "responded" }).eq("id", r.id);
+        ADMIN.toast("Draft quotation created", "success");
+        location.href = REC.admin("quotations.html");
+      } catch (err) {
+        ADMIN.toast(err.message || "Could not create quotation", "error");
+      }
+    },
+  };
+
+  ADMIN.register("bulk_requests", AdminPage);
+})(window);
+/* ============================================================
+   REC — Admin Farm Visits (farm_visit_bookings)
+   ============================================================ */
+(function (win) {
+  "use strict";
+  const REC = (win.REC = win.REC || {});
+  const ADMIN = (win.RECAdmin = win.RECAdmin || {});
+  const sb = () => REC.supabaseClient;
+  const STATUSES = ["new", "confirmed", "rescheduled", "rejected", "completed", "cancelled"];
+  const BADGE = { new: "badge-gold", confirmed: "badge-green", rescheduled: "badge-gold", rejected: "badge-red", completed: "badge-green", cancelled: "badge-gray" };
+
+  const AdminPage = {
+    state: { rows: [], filter: "all" },
+
+    async init() {
+      document.title = "Farm Visits | REC Admin";
+      ADMIN.setState();
+      const content = document.getElementById("admin-content");
+      if (!sb()) return (content.innerHTML = ADMIN.emptyState("No connection", "Connect Supabase first."));
+
+      content.innerHTML =
+        '<div class="admin-panel"><div class="ap-head"><div><h3>Farm Visits</h3>' +
+        '<span style="font-size:.8rem;color:var(--muted)">Visit requests booked from the website.</span></div>' +
+        '<select class="select" id="fv_filter" style="max-width:170px"><option value="all">All statuses</option>' +
+        STATUSES.map((s) => '<option value="' + s + '">' + s.charAt(0).toUpperCase() + s.slice(1) + "</option>").join("") +
+        "</select></div>" +
+        '<div class="ap-body" id="fv_list">' + ADMIN.skeleton(6) + "</div></div>";
+
+      document.getElementById("fv_filter").addEventListener("change", (e) => { this.state.filter = e.target.value; this.render(); });
+      document.getElementById("fv_list").addEventListener("change", (e) => this.onChange(e));
+      document.getElementById("fv_list").addEventListener("click", (e) => this.onClick(e));
+      await this.load();
+    },
+
+    async load() {
+      const { data, error } = await sb().from("farm_visit_bookings").select("*").order("created_at", { ascending: false }).limit(300);
+      if (error) return ADMIN.toast(error.message, "error");
+      this.state.rows = data || [];
+      ADMIN.setCount("farm_visits", this.state.rows.filter((r) => r.status === "new").length);
+      this.render();
+    },
+
+    render() {
+      const host = document.getElementById("fv_list");
+      let list = this.state.rows;
+      if (this.state.filter !== "all") list = list.filter((r) => r.status === this.state.filter);
+      if (!list.length) {
+        host.innerHTML = ADMIN.emptyState("No visit requests", "Farm visit requests from the storefront arrive here.");
+        return;
+      }
+      host.innerHTML =
+        '<div class="table-wrap"><table class="data-table"><thead><tr>' +
+        "<th>Date</th><th>Visitor</th><th>Preferred</th><th>Visitors</th><th>Status</th><th>Notes</th><th></th>" +
+        "</tr></thead><tbody>" +
+        list.map((r) => {
+          const opts = STATUSES.map((s) => '<option value="' + s + '"' + (r.status === s ? " selected" : "") + ">" + s.charAt(0).toUpperCase() + s.slice(1) + "</option>").join("");
+          return "<tr>" +
+            "<td>" + ADMIN.date(r.created_at) + "</td>" +
+            '<td class="t-strong">' + ADMIN.esc(r.name) +
+            '<div style="font-size:.78rem;color:var(--muted)">' + ADMIN.esc(r.phone || "") + (r.email ? " · " + ADMIN.esc(r.email) : "") + "</div>" +
+            (r.purpose ? '<div style="font-size:.78rem;color:var(--muted)">' + ADMIN.esc(r.purpose) + "</div>" : "") + "</td>" +
+            "<td>" + ADMIN.esc((r.preferred_date || "—") + (r.preferred_time ? " " + r.preferred_time : "")) + "</td>" +
+            "<td>" + (r.visitors || 1) + "</td>" +
+            '<td><select class="select fv-status" data-id="' + r.id + '" style="padding:.3rem .4rem;font-size:.78rem">' + opts + "</select></td>" +
+            '<td><input class="input fv-notes" data-id="' + r.id + '" value="' + ADMIN.esc(r.staff_notes || "") + '" style="min-width:150px;padding:.4rem .5rem" placeholder="Staff notes"/></td>' +
+            '<td><button class="btn btn-sm btn-outline" data-del="' + r.id + '">Delete</button></td>' +
+            "</tr>";
+        }).join("") +
+        "</tbody></table></div>";
+    },
+
+    async onChange(e) {
+      const sel = e.target.closest(".fv-status");
+      if (!sel) return;
+      try {
+        const { error } = await sb().from("farm_visit_bookings").update({ status: sel.value }).eq("id", sel.getAttribute("data-id"));
+        if (error) throw error;
+        ADMIN.toast("Status updated", "success");
+        await this.load();
+      } catch (err) {
+        ADMIN.toast(err.message || "Update failed", "error");
+      }
+    },
+
+    async onClick(e) {
+      const notes = e.target.closest(".fv-notes");
+      const del = e.target.closest("[data-del]");
+      try {
+        if (notes) {
+          const { error } = await sb().from("farm_visit_bookings").update({ staff_notes: notes.value.trim() || null }).eq("id", notes.getAttribute("data-id"));
+          if (error) throw error;
+          ADMIN.toast("Notes saved", "success");
+        } else if (del) {
+          if (!confirm("Delete this visit request?")) return;
+          const { error } = await sb().from("farm_visit_bookings").delete().eq("id", del.getAttribute("data-del"));
+          if (error) throw error;
+          ADMIN.toast("Request deleted", "success");
+          await this.load();
+        }
+      } catch (err) {
+        ADMIN.toast(err.message || "Action failed", "error");
+      }
+    },
+  };
+
+  ADMIN.register("farm_visits", AdminPage);
+})(window);
+/* ============================================================
+   REC — Admin Quotations (quotations + quotation_items)
+   ============================================================ */
+(function (win) {
+  "use strict";
+  const REC = (win.REC = win.REC || {});
+  const ADMIN = (win.RECAdmin = win.RECAdmin || {});
+  const sb = () => REC.supabaseClient;
+  const STATUSES = ["draft", "sent", "accepted", "rejected", "expired"];
+  const BADGE = { draft: "badge-gray", sent: "badge-gold", accepted: "badge-green", rejected: "badge-red", expired: "badge-gray" };
+
+  const AdminPage = {
+    state: { rows: [], products: [], itemsMap: {}, editId: null },
+
+    async init() {
+      document.title = "Quotations | REC Admin";
+      ADMIN.setState();
+      const content = document.getElementById("admin-content");
+      if (!sb()) return (content.innerHTML = ADMIN.emptyState("No connection", "Connect Supabase first."));
+
+      content.innerHTML =
+        '<div class="admin-panel"><div class="ap-head"><div><h3>Quotations</h3>' +
+        '<span style="font-size:.8rem;color:var(--muted)">Prepare and track quotes for bulk / B2B customers.</span></div>' +
+        '<button class="btn btn-sm btn-primary" id="q_add"><svg aria-hidden="true" style="width:16px;height:16px"><use href="' + REC.sprite("i-plus") + '"></use></svg> New Quotation</button></div>' +
+        '<div class="ap-body" id="q_list">' + ADMIN.skeleton(6) + "</div></div>";
+
+      document.getElementById("q_add").addEventListener("click", () => this.openForm(null));
+      document.getElementById("q_list").addEventListener("click", (e) => this.onClick(e));
+      document.getElementById("q_list").addEventListener("change", (e) => {
+        const stat = e.target.closest(".q-status");
+        if (stat) this.setStatus(stat.getAttribute("data-id"), stat.value);
+      });
+      await this.load();
+    },
+
+    async load() {
+      const [q, items, p] = await Promise.all([
+        sb().from("quotations").select("*").order("created_at", { ascending: false }).limit(300),
+        sb().from("quotation_items").select("*"),
+        sb().from("products").select("id,name,price,unit").order("name"),
+      ]);
+      if (q.error) return ADMIN.toast(q.error.message, "error");
+      this.state.rows = q.data || [];
+      this.state.products = p.data || [];
+      const map = {};
+      (items.data || []).forEach((it) => { (map[it.quotation_id] = map[it.quotation_id] || []).push(it); });
+      this.state.itemsMap = map;
+      this.render();
+    },
+
+    render() {
+      const host = document.getElementById("q_list");
+      if (!this.state.rows.length) {
+        host.innerHTML = ADMIN.emptyState("No quotations yet", "Create a quotation or convert a bulk request from Bulk Requests.");
+        return;
+      }
+      host.innerHTML =
+        '<div class="table-wrap"><table class="data-table"><thead><tr>' +
+        "<th>Reference</th><th>Customer</th><th>Items</th><th>Total</th><th>Status</th><th>Created</th><th>Actions</th>" +
+        "</tr></thead><tbody>" +
+        this.state.rows.map((r) => {
+          const items = this.state.itemsMap[r.id] || [];
+          const opts = STATUSES.map((s) => '<option value="' + s + '"' + (r.status === s ? " selected" : "") + ">" + s.charAt(0).toUpperCase() + s.slice(1) + "</option>").join("");
+          return "<tr>" +
+            '<td class="t-strong">' + ADMIN.esc(r.reference || "—") + "</td>" +
+            "<td>" + ADMIN.esc(r.customer_name || "—") + '<div style="font-size:.78rem;color:var(--muted)">' + ADMIN.esc(r.phone || r.email || "") + "</div></td>" +
+            "<td>" + items.length + "</td>" +
+            "<td>" + ADMIN.money(r.total || 0) + "</td>" +
+            '<td><select class="select q-status" data-id="' + r.id + '" style="padding:.3rem .4rem;font-size:.78rem">' + opts + "</select></td>" +
+            "<td>" + ADMIN.date(r.created_at) + "</td>" +
+            '<td><div style="display:flex;gap:.35rem;flex-wrap:wrap">' +
+            '<button class="btn btn-sm btn-outline" data-edit="' + r.id + '">Edit</button>' +
+            '<button class="btn btn-sm btn-outline" data-print="' + r.id + '">Print</button>' +
+            '<button class="btn btn-sm btn-outline" data-del="' + r.id + '">Delete</button>' +
+            "</div></td></tr>";
+        }).join("") +
+        "</tbody></table></div>";
+    },
+
+    async onClick(e) {
+      const edit = e.target.closest("[data-edit]");
+      const del = e.target.closest("[data-del]");
+      const print = e.target.closest("[data-print]");
+      try {
+        if (edit) {
+          this.openForm(edit.getAttribute("data-edit"));
+        } else if (del) {
+          if (!confirm("Delete this quotation?")) return;
+          await sb().from("quotation_items").delete().eq("quotation_id", del.getAttribute("data-del"));
+          const { error } = await sb().from("quotations").delete().eq("id", del.getAttribute("data-del"));
+          if (error) throw error;
+          ADMIN.toast("Quotation deleted", "success");
+          await this.load();
+        } else if (print) {
+          this.print(print.getAttribute("data-print"));
+        }
+      } catch (err) {
+        ADMIN.toast(err.message || "Action failed", "error");
+      }
+    },
+
+    async setStatus(id, status) {
+      try {
+        const { error } = await sb().from("quotations").update({ status }).eq("id", id);
+        if (error) throw error;
+        ADMIN.toast("Status updated", "success");
+      } catch (err) {
+        ADMIN.toast(err.message || "Update failed", "error");
+        await this.load();
+      }
+    },
+
+    itemRow(it) {
+      const prod = it || {};
+      const prodOpts = '<option value="">— custom —</option>' + this.state.products
+        .map((p) => '<option value="' + p.id + '"' + (prod.product_id === p.id ? " selected" : "") + ">" + ADMIN.esc(p.name) + "</option>")
+        .join("");
+      return (
+        '<div class="q-item" style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr auto;gap:.4rem;align-items:center;margin-bottom:.4rem">' +
+        '<select class="select qi-prod">' + prodOpts + "</select>" +
+        '<input class="input qi-name" placeholder="Item name" value="' + ADMIN.esc(prod.name || "") + '"/>' +
+        '<input class="input qi-qty" type="number" min="0" step="1" placeholder="Qty" value="' + (prod.quantity != null ? prod.quantity : 1) + '"/>' +
+        '<input class="input qi-price" type="number" min="0" step="0.01" placeholder="Unit price" value="' + (prod.unit_price != null ? prod.unit_price : "") + '"/>' +
+        '<button type="button" class="btn btn-sm btn-outline qi-del">×</button>' +
+        "</div>"
+      );
+    },
+
+    openForm(id) {
+      this.state.editId = id || null;
+      const r = id ? this.state.rows.find((x) => x.id === id) : null;
+      const items = id ? this.state.itemsMap[id] || [] : [];
+      let modal = document.getElementById("q_modal");
+      if (!modal) { modal = document.createElement("div"); modal.className = "modal-root"; modal.id = "q_modal"; document.body.appendChild(modal); }
+      modal.innerHTML =
+        '<div class="modal-backdrop" data-close></div>' +
+        '<div class="modal-card modal-lg" role="dialog" aria-modal="true">' +
+        '<button class="modal-close" data-close aria-label="Close"><svg><use href="' + REC.sprite("i-close") + '"></use></svg></button>' +
+        "<h3>" + (r ? "Edit Quotation" : "New Quotation") + "</h3>" +
+        '<div class="admin-grid-2">' +
+        '<div class="field"><label>Customer name</label><input class="input" id="qf_name" value="' + ADMIN.esc(r ? r.customer_name || "" : "") + '"/></div>' +
+        '<div class="field"><label>Phone</label><input class="input" id="qf_phone" value="' + ADMIN.esc(r ? r.phone || "" : "") + '"/></div>' +
+        '<div class="field"><label>Email</label><input class="input" id="qf_email" type="email" value="' + ADMIN.esc(r ? r.email || "" : "") + '"/></div>' +
+        '<div class="field"><label>Status</label><select class="select" id="qf_status">' +
+        STATUSES.map((s) => '<option value="' + s + '"' + (r && r.status === s ? " selected" : "") + ">" + s.charAt(0).toUpperCase() + s.slice(1) + "</option>").join("") +
+        "</select></div>" +
+        '<div class="field"><label>Valid until</label><input class="input" id="qf_valid" type="date" value="' + ADMIN.esc(r && r.valid_until ? r.valid_until : "") + '"/></div>' +
+        '<div class="field"><label>Delivery fee (₦)</label><input class="input" id="qf_delivery" type="number" min="0" step="0.01" value="' + (r ? r.delivery_fee || 0 : 0) + '"/></div>' +
+        '<div class="field full"><label>Notes</label><textarea class="textarea" id="qf_notes" style="min-height:56px">' + ADMIN.esc(r ? r.notes || "" : "") + "</textarea></div>" +
+        "</div>" +
+        '<h4 style="margin:.8rem 0 .5rem">Items</h4>' +
+        '<div id="qf_items"></div>' +
+        '<button type="button" class="btn btn-sm btn-outline" id="qf_additem" style="margin-top:.3rem">+ Add item</button>' +
+        '<div class="pd-meta" style="margin-top:.8rem;justify-content:flex-end"><strong>Total</strong><span id="qf_total">' + ADMIN.money(0) + "</span></div>" +
+        '<div class="form-actions"><button class="btn btn-primary" id="qf_save">Save Quotation</button>' +
+        '<button class="btn btn-outline" data-close>Cancel</button></div></div>';
+
+      const itemsHost = document.getElementById("qf_items");
+      const renderItems = () => {
+        const list = items.length ? items : [null];
+        itemsHost.innerHTML = list.map((it) => this.itemRow(it)).join("");
+        this.bindItems(modal);
+        this.recalc(modal);
+      };
+      renderItems();
+
+      modal.classList.add("open");
+      modal.querySelectorAll("[data-close]").forEach((el) => el.addEventListener("click", () => modal.classList.remove("open")));
+      document.getElementById("qf_additem").addEventListener("click", () => {
+        itemsHost.insertAdjacentHTML("beforeend", this.itemRow(null));
+        this.bindItems(modal);
+        this.recalc(modal);
+      });
+      document.getElementById("qf_save").addEventListener("click", () => this.save(modal, itemsHost));
+    },
+
+    bindItems(modal) {
+      if (modal.dataset.itemsBound) return;
+      modal.dataset.itemsBound = "1";
+      modal.addEventListener("input", (e) => {
+        if (e.target.closest(".q-item")) this.recalc(modal);
+      });
+      modal.addEventListener("change", (e) => {
+        const sel = e.target.closest(".qi-prod");
+        if (sel) {
+          const p = this.state.products.find((x) => x.id === sel.value);
+          const row = sel.closest(".q-item");
+          if (p && row) {
+            row.querySelector(".qi-name").value = p.name;
+            if (!row.querySelector(".qi-price").value) row.querySelector(".qi-price").value = p.price || 0;
+          }
+        }
+        this.recalc(modal);
+      });
+      modal.addEventListener("click", (e) => {
+        if (e.target.closest(".qi-del")) {
+          const row = e.target.closest(".q-item");
+          const host = document.getElementById("qf_items");
+          row.remove();
+          if (!host.children.length) { host.insertAdjacentHTML("beforeend", this.itemRow(null)); this.recalc(modal); }
+          this.recalc(modal);
+        }
+      });
+    },
+
+    readItems(host) {
+      return Array.from(host.querySelectorAll(".q-item")).map((row) => {
+        const qty = Number(row.querySelector(".qi-qty").value || 0);
+        const unit = Number(row.querySelector(".qi-price").value || 0);
+        return {
+          product_id: row.querySelector(".qi-prod").value || null,
+          name: row.querySelector(".qi-name").value.trim(),
+          quantity: qty,
+          unit_price: unit,
+          subtotal: qty * unit,
+        };
+      }).filter((it) => it.name);
+    },
+
+    recalc(modal) {
+      const host = document.getElementById("qf_items");
+      const subtotal = this.readItems(host).reduce((s, it) => s + it.subtotal, 0);
+      const fee = Number((document.getElementById("qf_delivery") || {}).value || 0);
+      const el = document.getElementById("qf_total");
+      if (el) el.textContent = ADMIN.money(subtotal + fee);
+    },
+
+    async save(modal, itemsHost) {
+      const items = this.readItems(itemsHost);
+      const subtotal = items.reduce((s, it) => s + it.subtotal, 0);
+      const delivery = Number((document.getElementById("qf_delivery") || {}).value || 0);
+      const payload = {
+        customer_name: document.getElementById("qf_name").value.trim() || null,
+        phone: document.getElementById("qf_phone").value.trim() || null,
+        email: document.getElementById("qf_email").value.trim() || null,
+        status: document.getElementById("qf_status").value,
+        valid_until: document.getElementById("qf_valid").value || null,
+        subtotal,
+        delivery_fee: delivery,
+        total: subtotal + delivery,
+        notes: document.getElementById("qf_notes").value.trim() || null,
+      };
+      const btn = document.getElementById("qf_save");
+      btn.disabled = true;
+      btn.textContent = "Saving…";
+      try {
+        let id = this.state.editId;
+        if (id) {
+          const { error } = await sb().from("quotations").update(payload).eq("id", id);
+          if (error) throw error;
+          await sb().from("quotation_items").delete().eq("quotation_id", id);
+        } else {
+          const { data, error } = await sb().from("quotations").insert(payload).select("id").single();
+          if (error) throw error;
+          id = data.id;
+        }
+        if (items.length) {
+          const { error } = await sb().from("quotation_items").insert(items.map((it) => ({ ...it, quotation_id: id })));
+          if (error) throw error;
+        }
+        ADMIN.toast("Quotation saved", "success");
+        modal.classList.remove("open");
+        await this.load();
+      } catch (err) {
+        ADMIN.toast(err.message || "Save failed", "error");
+        btn.disabled = false;
+        btn.textContent = "Save Quotation";
+      }
+    },
+
+    print(id) {
+      const r = this.state.rows.find((x) => x.id === id);
+      if (!r) return;
+      const items = this.state.itemsMap[id] || [];
+      const rows = items.map((it) => "<tr><td>" + ADMIN.esc(it.name) + "</td><td>" + it.quantity + "</td><td>" + ADMIN.money(it.unit_price) + "</td><td>" + ADMIN.money(it.subtotal) + "</td></tr>").join("");
+      const w = window.open("", "_blank");
+      if (!w) return;
+      w.document.write(
+        "<html><head><title>" + ADMIN.esc(r.reference || "Quotation") + "</title>" +
+        "<style>body{font-family:Arial,sans-serif;padding:32px;color:#222}h1{margin:0}table{width:100%;border-collapse:collapse;margin-top:16px}th,td{border:1px solid #ccc;padding:8px;text-align:left}.r{text-align:right}</style></head><body>" +
+        "<h1>REC Livestock &amp; Agro Farms</h1><p>Quotation <b>" + ADMIN.esc(r.reference || "") + "</b></p>" +
+        "<p>Customer: " + ADMIN.esc(r.customer_name || "") + "<br/>Phone: " + ADMIN.esc(r.phone || "") + "<br/>Email: " + ADMIN.esc(r.email || "") + "</p>" +
+        "<table><thead><tr><th>Item</th><th>Qty</th><th>Unit</th><th>Subtotal</th></tr></thead><tbody>" + rows + "</tbody></table>" +
+        "<p class='r'>Subtotal: " + ADMIN.money(r.subtotal || 0) + "<br/>Delivery: " + ADMIN.money(r.delivery_fee || 0) + "<br/><b>Total: " + ADMIN.money(r.total || 0) + "</b></p>" +
+        "<p>" + ADMIN.esc(r.notes || "") + "</p></body></html>"
+      );
+      w.document.close();
+      w.focus();
+      w.print();
+    },
+  };
+
+  ADMIN.register("quotations", AdminPage);
+})(window);
+/* ============================================================
+   REC — Admin Product Batches (product_batches)
+   ============================================================ */
+(function (win) {
+  "use strict";
+  const REC = (win.REC = win.REC || {});
+  const ADMIN = (win.RECAdmin = win.RECAdmin || {});
+  const sb = () => REC.supabaseClient;
+
+  const AdminPage = {
+    state: { rows: [], products: {}, list: [] },
+
+    async init() {
+      document.title = "Batches | REC Admin";
+      ADMIN.setState();
+      const content = document.getElementById("admin-content");
+      if (!sb()) return (content.innerHTML = ADMIN.emptyState("No connection", "Connect Supabase first."));
+
+      content.innerHTML =
+        '<div class="admin-panel"><div class="ap-head"><div><h3>Product Batches</h3>' +
+        '<span style="font-size:.8rem;color:var(--muted)">Track hatch dates and available quantities per batch.</span></div>' +
+        '<button class="btn btn-sm btn-primary" id="b_add"><svg aria-hidden="true" style="width:16px;height:16px"><use href="' + REC.sprite("i-plus") + '"></use></svg> Add Batch</button></div>' +
+        '<div class="ap-body" id="b_list">' + ADMIN.skeleton(6) + "</div></div>";
+
+      document.getElementById("b_add").addEventListener("click", () => this.openForm(null));
+      document.getElementById("b_list").addEventListener("click", (e) => this.onClick(e));
+      await this.load();
+    },
+
+    async load() {
+      const [b, p] = await Promise.all([
+        sb().from("product_batches").select("*").order("created_at", { ascending: false }).limit(300),
+        sb().from("products").select("id,name").order("name"),
+      ]);
+      if (b.error) return ADMIN.toast(b.error.message, "error");
+      this.state.rows = b.data || [];
+      this.state.list = p.data || [];
+      const map = {};
+      this.state.list.forEach((x) => (map[x.id] = x.name));
+      this.state.products = map;
+      this.render();
+    },
+
+    render() {
+      const host = document.getElementById("b_list");
+      if (!this.state.rows.length) {
+        host.innerHTML = ADMIN.emptyState("No batches yet", "Add a batch to track hatch dates and availability.");
+        return;
+      }
+      host.innerHTML =
+        '<div class="table-wrap"><table class="data-table"><thead><tr>' +
+        "<th>Batch</th><th>Product</th><th>Breed</th><th>Hatch date</th><th>Total</th><th>Available</th><th>Status</th><th>Actions</th>" +
+        "</tr></thead><tbody>" +
+        this.state.rows.map((r) =>
+          "<tr>" +
+          '<td class="t-strong">' + ADMIN.esc(r.batch_number) + "</td>" +
+          "<td>" + ADMIN.esc(this.state.products[r.product_id] || "—") + "</td>" +
+          "<td>" + ADMIN.esc(r.breed || "—") + "</td>" +
+          "<td>" + ADMIN.esc(r.hatch_date || "—") + "</td>" +
+          "<td>" + (r.total_quantity || 0) + "</td>" +
+          "<td>" + (r.available_quantity || 0) + "</td>" +
+          '<td><span class="badge ' + (r.status === "available" ? "badge-green" : r.status === "preorder" ? "badge-gold" : "badge-gray") + '">' + ADMIN.esc(r.status) + "</span></td>" +
+          '<td><div style="display:flex;gap:.35rem"><button class="btn btn-sm btn-outline" data-edit="' + r.id + '">Edit</button>' +
+          '<button class="btn btn-sm btn-outline" data-del="' + r.id + '">Delete</button></div></td></tr>'
+        ).join("") +
+        "</tbody></table></div>";
+    },
+
+    async onClick(e) {
+      const edit = e.target.closest("[data-edit]");
+      const del = e.target.closest("[data-del]");
+      try {
+        if (edit) this.openForm(edit.getAttribute("data-edit"));
+        else if (del) {
+          if (!confirm("Delete this batch?")) return;
+          const { error } = await sb().from("product_batches").delete().eq("id", del.getAttribute("data-del"));
+          if (error) throw error;
+          ADMIN.toast("Batch deleted", "success");
+          await this.load();
+        }
+      } catch (err) {
+        ADMIN.toast(err.message || "Action failed", "error");
+      }
+    },
+
+    openForm(id) {
+      const r = id ? this.state.rows.find((x) => x.id === id) : null;
+      const prodOpts = this.state.list.map((p) => '<option value="' + p.id + '"' + (r && r.product_id === p.id ? " selected" : "") + ">" + ADMIN.esc(p.name) + "</option>").join("");
+      let modal = document.getElementById("b_modal");
+      if (!modal) { modal = document.createElement("div"); modal.className = "modal-root"; modal.id = "b_modal"; document.body.appendChild(modal); }
+      modal.innerHTML =
+        '<div class="modal-backdrop" data-close></div>' +
+        '<div class="modal-card" role="dialog" aria-modal="true">' +
+        '<button class="modal-close" data-close aria-label="Close"><svg><use href="' + REC.sprite("i-close") + '"></use></svg></button>' +
+        "<h3>" + (r ? "Edit Batch" : "Add Batch") + "</h3>" +
+        '<div class="admin-grid-2">' +
+        '<div class="field full"><label>Product *</label><select class="select" id="bf_prod">' + prodOpts + "</select></div>" +
+        '<div class="field"><label>Batch number *</label><input class="input" id="bf_number" value="' + ADMIN.esc(r ? r.batch_number : "") + '"/></div>' +
+        '<div class="field"><label>Breed / type</label><input class="input" id="bf_breed" value="' + ADMIN.esc(r ? r.breed || "" : "") + '"/></div>' +
+        '<div class="field"><label>Hatch date</label><input class="input" id="bf_hatch" type="date" value="' + ADMIN.esc(r && r.hatch_date ? r.hatch_date : "") + '"/></div>' +
+        '<div class="field"><label>Status</label><select class="select" id="bf_status">' +
+        ["available", "preorder", "sold_out"].map((s) => '<option value="' + s + '"' + (r && r.status === s ? " selected" : "") + ">" + s + "</option>").join("") + "</select></div>" +
+        '<div class="field"><label>Total quantity</label><input class="input" id="bf_total" type="number" min="0" value="' + (r ? r.total_quantity || 0 : 0) + '"/></div>' +
+        '<div class="field"><label>Available quantity</label><input class="input" id="bf_avail" type="number" min="0" value="' + (r ? r.available_quantity || 0 : 0) + '"/></div>' +
+        '<div class="field full"><label>Notes</label><textarea class="textarea" id="bf_notes" style="min-height:56px">' + ADMIN.esc(r ? r.notes || "" : "") + "</textarea></div>" +
+        "</div>" +
+        '<div class="form-actions"><button class="btn btn-primary" id="bf_save">Save Batch</button>' +
+        '<button class="btn btn-outline" data-close>Cancel</button></div></div>';
+      modal.classList.add("open");
+      modal.querySelectorAll("[data-close]").forEach((el) => el.addEventListener("click", () => modal.classList.remove("open")));
+      document.getElementById("bf_save").addEventListener("click", () => this.save(modal, id));
+    },
+
+    async save(modal, id) {
+      const get = (x) => document.getElementById(x);
+      const number = get("bf_number").value.trim();
+      if (!number) return ADMIN.toast("Batch number is required", "error");
+      const payload = {
+        product_id: get("bf_prod").value,
+        batch_number: number,
+        breed: get("bf_breed").value.trim() || null,
+        hatch_date: get("bf_hatch").value || null,
+        status: get("bf_status").value,
+        total_quantity: Number(get("bf_total").value || 0),
+        available_quantity: Number(get("bf_avail").value || 0),
+        notes: get("bf_notes").value.trim() || null,
+      };
+      try {
+        const q = id ? sb().from("product_batches").update(payload).eq("id", id) : sb().from("product_batches").insert(payload);
+        const { error } = await q;
+        if (error) throw error;
+        ADMIN.toast("Batch saved", "success");
+        modal.classList.remove("open");
+        await this.load();
+      } catch (err) {
+        ADMIN.toast(err.message || "Save failed", "error");
+      }
+    },
+  };
+
+  ADMIN.register("batches", AdminPage);
+})(window);
+/* ============================================================
+   REC — Admin Inventory Movements (inventory_movements)
+   ============================================================ */
+(function (win) {
+  "use strict";
+  const REC = (win.REC = win.REC || {});
+  const ADMIN = (win.RECAdmin = win.RECAdmin || {});
+  const sb = () => REC.supabaseClient;
+
+  const AdminPage = {
+    state: { rows: [], products: [], map: {} },
+
+    async init() {
+      document.title = "Stock Movements | REC Admin";
+      ADMIN.setState();
+      const content = document.getElementById("admin-content");
+      if (!sb()) return (content.innerHTML = ADMIN.emptyState("No connection", "Connect Supabase first."));
+
+      content.innerHTML =
+        '<div class="admin-panel"><div class="ap-head"><div><h3>Stock Movements</h3>' +
+        '<span style="font-size:.8rem;color:var(--muted)">Manual stock adjustments are recorded here (append-only history).</span></div>' +
+        '<button class="btn btn-sm btn-primary" id="mv_add"><svg aria-hidden="true" style="width:16px;height:16px"><use href="' + REC.sprite("i-plus") + '"></use></svg> Record Movement</button></div>' +
+        '<div class="ap-body" id="mv_list">' + ADMIN.skeleton(6) + "</div></div>";
+
+      document.getElementById("mv_add").addEventListener("click", () => this.openForm());
+      await this.load();
+    },
+
+    async load() {
+      const [m, p] = await Promise.all([
+        sb().from("inventory_movements").select("*").order("created_at", { ascending: false }).limit(300),
+        sb().from("products").select("id,name,stock_quantity,unit").order("name"),
+      ]);
+      if (m.error) return ADMIN.toast(m.error.message, "error");
+      this.state.rows = m.data || [];
+      this.state.products = p.data || [];
+      const map = {};
+      this.state.products.forEach((x) => (map[x.id] = x));
+      this.state.map = map;
+      this.render();
+    },
+
+    render() {
+      const host = document.getElementById("mv_list");
+      if (!this.state.rows.length) {
+        host.innerHTML = ADMIN.emptyState("No movements yet", "Record a stock adjustment to start the history.");
+        return;
+      }
+      host.innerHTML =
+        '<div class="table-wrap"><table class="data-table"><thead><tr>' +
+        "<th>When</th><th>Product</th><th>Change</th><th>After</th><th>Reason</th><th>Reference</th>" +
+        "</tr></thead><tbody>" +
+        this.state.rows.map((r) => {
+          const p = this.state.map[r.product_id] || {};
+          return "<tr>" +
+            "<td>" + ADMIN.date(r.created_at) + "</td>" +
+            '<td class="t-strong">' + ADMIN.esc(p.name || "—") + "</td>" +
+            '<td style="color:' + (r.change < 0 ? "var(--danger)" : "var(--green-600)") + ';font-weight:700">' + (r.change > 0 ? "+" : "") + r.change + "</td>" +
+            "<td>" + (r.quantity_after != null ? r.quantity_after : "—") + "</td>" +
+            "<td>" + ADMIN.esc(r.reason || "—") + "</td>" +
+            "<td>" + ADMIN.esc(r.reference || "—") + "</td></tr>";
+        }).join("") +
+        "</tbody></table></div>";
+    },
+
+    openForm() {
+      const prodOpts = this.state.products.map((p) => '<option value="' + p.id + '">' + ADMIN.esc(p.name) + " (" + (p.stock_quantity || 0) + ")</option>").join("");
+      let modal = document.getElementById("mv_modal");
+      if (!modal) { modal = document.createElement("div"); modal.className = "modal-root"; modal.id = "mv_modal"; document.body.appendChild(modal); }
+      modal.innerHTML =
+        '<div class="modal-backdrop" data-close></div>' +
+        '<div class="modal-card" role="dialog" aria-modal="true">' +
+        '<button class="modal-close" data-close aria-label="Close"><svg><use href="' + REC.sprite("i-close") + '"></use></svg></button>' +
+        "<h3>Record Movement</h3>" +
+        '<div class="admin-grid-2">' +
+        '<div class="field full"><label>Product *</label><select class="select" id="mvf_prod">' + prodOpts + "</select></div>" +
+        '<div class="field"><label>Change (use − to reduce) *</label><input class="input" id="mvf_change" type="number" step="1" placeholder="e.g. 10 or -5"/></div>' +
+        '<div class="field"><label>Reference</label><input class="input" id="mvf_ref" placeholder="e.g. PO-1024"/></div>' +
+        '<div class="field full"><label>Reason *</label><input class="input" id="mvf_reason" placeholder="e.g. New delivery received"/></div>' +
+        "</div>" +
+        '<div class="form-actions"><button class="btn btn-primary" id="mvf_save">Save Movement</button>' +
+        '<button class="btn btn-outline" data-close>Cancel</button></div></div>';
+      modal.classList.add("open");
+      modal.querySelectorAll("[data-close]").forEach((el) => el.addEventListener("click", () => modal.classList.remove("open")));
+      document.getElementById("mvf_save").addEventListener("click", () => this.save(modal));
+    },
+
+    async save(modal) {
+      const get = (x) => document.getElementById(x);
+      const productId = get("mvf_prod").value;
+      const change = Number(get("mvf_change").value);
+      const reason = get("mvf_reason").value.trim();
+      if (!productId) return ADMIN.toast("Choose a product", "error");
+      if (!change) return ADMIN.toast("Enter a non-zero change", "error");
+      if (!reason) return ADMIN.toast("A reason is required", "error");
+      const product = this.state.map[productId] || {};
+      const after = Number(product.stock_quantity || 0) + change;
+      try {
+        const { error } = await sb().from("inventory_movements").insert({
+          product_id: productId,
+          change,
+          quantity_after: after,
+          reason,
+          reference: get("mvf_ref").value.trim() || null,
+        });
+        if (error) throw error;
+        const { error: pErr } = await sb().from("products").update({ stock_quantity: Math.max(0, after) }).eq("id", productId);
+        if (pErr) throw pErr;
+        ADMIN.toast("Movement recorded", "success");
+        modal.classList.remove("open");
+        await this.load();
+      } catch (err) {
+        ADMIN.toast(err.message || "Save failed", "error");
+      }
+    },
+  };
+
+  ADMIN.register("movements", AdminPage);
 })(window);
 
 window.REC_LOADED = true;

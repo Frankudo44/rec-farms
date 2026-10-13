@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Book a Farm Visit | REC Livestock &amp; Agro Farms Enterprises</title>
+  <meta name="description" content="Book a guided visit to REC Livestock & Agro Farms Enterprises. See our poultry, livestock, fish ponds and produce first-hand."/>
+  <link rel="canonical" href="https://rec-farms.com/farm-visit.html"/>
+  <link rel="icon" href="../assets/logo/rec-logo.jpg"/>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+    <link rel="stylesheet" href="../css/style.css?v=2026-10-12.4">
+</head>
+<body>
+
+  <header class="site-header" id="site-header"></header>
+
+  <main>
+    <section class="page-hero">
+      <div class="container">
+        <div class="inner">
+          <nav class="breadcrumb" aria-label="Breadcrumb">
+            <a href="../index.html">Home</a><span class="sep">/</span><span aria-current="page">Farm Visit</span>
+          </nav>
+          <h1>Book a Farm Visit</h1>
+          <p>Come and see exactly how your food is raised. Book a guided tour of our poultry pens, livestock, fish ponds and produce areas.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="container">
+        <div class="checkout-layout">
+          <div>
+            <div class="checkout-panel">
+              <h3><span class="step-n">1</span> Visit Details</h3>
+              <form id="farm_visit_form">
+                <div class="form-grid">
+                  <div class="field">
+                    <label for="v_name">Full Name *</label>
+                    <input class="input" id="v_name" type="text" required autocomplete="name"/>
+                  </div>
+                  <div class="field">
+                    <label for="v_phone">Phone / WhatsApp *</label>
+                    <input class="input" id="v_phone" type="tel" required autocomplete="tel"/>
+                  </div>
+                  <div class="field">
+                    <label for="v_email">Email</label>
+                    <input class="input" id="v_email" type="email" autocomplete="email"/>
+                  </div>
+                  <div class="field">
+                    <label for="v_date">Preferred date</label>
+                    <input class="input" id="v_date" type="date"/>
+                  </div>
+                  <div class="field">
+                    <label for="v_time">Preferred time</label>
+                    <input class="input" id="v_time" type="text" placeholder="e.g. 10:00 AM"/>
+                  </div>
+                  <div class="field">
+                    <label for="v_visitors">Number of visitors</label>
+                    <input class="input" id="v_visitors" type="number" min="1" step="1" value="1"/>
+                  </div>
+                  <div class="field full">
+                    <label for="v_purpose">Purpose / anything we should know</label>
+                    <textarea class="textarea" id="v_purpose" rows="4" placeholder="e.g. School tour, bulk buyer inspection, family visit…"></textarea>
+                  </div>
+                </div>
+                <div class="hp-field" aria-hidden="true" style="position:absolute;left:-9999px;top:-9999px;width:1px;height:1px;overflow:hidden">
+                  <label for="v_website">Leave this field empty</label>
+                  <input class="input" id="v_website" name="website" type="text" tabindex="-1" autocomplete="off"/>
+                </div>
+                <button class="btn btn-primary" id="v_submit" type="submit">Request Visit</button>
+              </form>
+            </div>
+          </div>
+
+          <aside>
+            <div class="cart-summary">
+              <h3>Good to know</h3>
+              <ul class="sum-list">
+                <li>Visits are by appointment only</li>
+                <li>We confirm your slot by phone/WhatsApp</li>
+                <li>Closed-toe shoes recommended</li>
+                <li>Some stock may be seasonal</li>
+              </ul>
+              <a class="btn btn-whatsapp btn-block" style="margin-top:1.2rem" href="#" id="v_wa_link" target="_blank" rel="noopener">
+                <svg aria-hidden="true"><use href="../assets/icons/sprite.svg#i-whatsapp"></use></svg>
+                Chat on WhatsApp
+              </a>
+            </div>
+          </aside>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer" id="site-footer"></footer>
+  <div class="mobile-menu" id="mobile-menu" aria-hidden="true"></div>
+  <a class="wa-float" id="wa-float" href="#" target="_blank" rel="noopener" aria-label="Chat with REC on WhatsApp">
+    <svg aria-hidden="true"><use href="../assets/icons/sprite.svg#i-whatsapp"></use></svg>
+  </a>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+    <script src="../js/app.js?v=2026-10-12.4"></script>
+</body>
+</html>

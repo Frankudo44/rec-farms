@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Request a Bulk Quote | REC Livestock &amp; Agro Farms Enterprises</title>
+  <meta name="description" content="Request a bulk or B2B quote from REC Livestock & Agro Farms Enterprises — poultry, livestock, eggs, fish and farm supplies delivered nationwide."/>
+  <link rel="canonical" href="https://rec-farms.com/quote.html"/>
+  <link rel="icon" href="../assets/logo/rec-logo.jpg"/>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+    <link rel="stylesheet" href="../css/style.css?v=2026-10-12.4">
+</head>
+<body>
+
+  <header class="site-header" id="site-header"></header>
+
+  <main>
+    <section class="page-hero">
+      <div class="container">
+        <div class="inner">
+          <nav class="breadcrumb" aria-label="Breadcrumb">
+            <a href="../index.html">Home</a><span class="sep">/</span><span aria-current="page">Bulk Quote</span>
+          </nav>
+          <h1>Request a Bulk Quote</h1>
+          <p>Buying in volume for a restaurant, reseller, event or farm? Tell us what you need and the REC team will send you a tailored quote.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="container">
+        <div class="checkout-layout">
+          <div>
+            <div class="checkout-panel">
+              <h3><span class="step-n">1</span> Your Requirements</h3>
+              <form id="quote_form">
+                <div class="form-grid">
+                  <div class="field">
+                    <label for="q_name">Full Name *</label>
+                    <input class="input" id="q_name" type="text" required autocomplete="name"/>
+                  </div>
+                  <div class="field">
+                    <label for="q_phone">Phone / WhatsApp *</label>
+                    <input class="input" id="q_phone" type="tel" required autocomplete="tel"/>
+                  </div>
+                  <div class="field">
+                    <label for="q_email">Email</label>
+                    <input class="input" id="q_email" type="email" autocomplete="email"/>
+                  </div>
+                  <div class="field">
+                    <label for="q_product">Product</label>
+                    <input class="input" id="q_product" type="text" placeholder="e.g. Day-old chicks, table eggs"/>
+                  </div>
+                  <div class="field">
+                    <label for="q_quantity">Quantity</label>
+                    <input class="input" id="q_quantity" type="number" min="1" step="1" value="1"/>
+                  </div>
+                  <div class="field">
+                    <label for="q_date">Preferred date</label>
+                    <input class="input" id="q_date" type="date"/>
+                  </div>
+                  <div class="field full">
+                    <label for="q_location">Delivery location</label>
+                    <input class="input" id="q_location" type="text" placeholder="City / State"/>
+                  </div>
+                  <div class="field full">
+                    <label for="q_requirements">Requirements</label>
+                    <textarea class="textarea" id="q_requirements" rows="4" placeholder="Sizes, packaging, frequency, budget…"></textarea>
+                  </div>
+                </div>
+                <div class="hp-field" aria-hidden="true" style="position:absolute;left:-9999px;top:-9999px;width:1px;height:1px;overflow:hidden">
+                  <label for="q_website">Leave this field empty</label>
+                  <input class="input" id="q_website" name="website" type="text" tabindex="-1" autocomplete="off"/>
+                </div>
+                <button class="btn btn-primary" id="q_submit" type="submit">Request Quote</button>
+              </form>
+            </div>
+          </div>
+
+          <aside>
+            <div class="cart-summary">
+              <h3>Why buy in bulk?</h3>
+              <ul class="sum-list">
+                <li>Better per-unit pricing</li>
+                <li>Priority stock reservations</li>
+                <li>Scheduled recurring deliveries</li>
+                <li>Dedicated account support</li>
+              </ul>
+              <a class="btn btn-whatsapp btn-block" style="margin-top:1.2rem" href="#" id="q_wa_link" target="_blank" rel="noopener">
+                <svg aria-hidden="true"><use href="../assets/icons/sprite.svg#i-whatsapp"></use></svg>
+                Chat on WhatsApp
+              </a>
+            </div>
+          </aside>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer" id="site-footer"></footer>
+  <div class="mobile-menu" id="mobile-menu" aria-hidden="true"></div>
+  <a class="wa-float" id="wa-float" href="#" target="_blank" rel="noopener" aria-label="Chat with REC on WhatsApp">
+    <svg aria-hidden="true"><use href="../assets/icons/sprite.svg#i-whatsapp"></use></svg>
+  </a>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+    <script src="../js/app.js?v=2026-10-12.4"></script>
+</body>
+</html>
