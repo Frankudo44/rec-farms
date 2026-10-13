@@ -61,7 +61,8 @@ rec-livestock/                # <- repo root, deploy this directory as-is
 │   └── blog.html / messages.html / settings.html
 ├── api/                       # Vercel serverless functions
 │   ├── sitemap.js             # Dynamic sitemap from Supabase
-│   └── verify-payment.js      # Paystack payment verification
+│   ├── verify-payment.js      # Paystack payment verification
+│   └── admin-create-staff.js  # Owner/admin: create staff logins (service-role)
 ├── css/                       # variables, global, components, layout,
 │                              # responsive, shop, admin
 ├── js/
@@ -218,12 +219,11 @@ The project is fully static — no build step.
 
 1. Push to GitHub, then **Import Project → Vercel** and choose the repo.
 2. Framework preset: **Other**. Output directory: leave as project root.
-3. The storefront needs no env vars — Supabase URL + anon key already live in
-   `js/config.js`. Only the serverless payment route needs secrets, and only if
-   you enable Paystack checkout:
-   - `SUPABASE_URL`
-   - `SUPABASE_SERVICE_ROLE_KEY`
-   - `PAYSTACK_SECRET_KEY`
+3. The storefront needs no env vars — the Supabase URL + anon key are inlined in
+   `js/app.js`. The serverless routes need secrets:
+   - `SUPABASE_URL` — required by both functions
+   - `SUPABASE_SERVICE_ROLE_KEY` — required by both functions
+   - `PAYSTACK_SECRET_KEY` — only if you enable Paystack checkout
 4. Attach your custom domain (`rec-farms.com`), add the 
    `robots.txt`/`sitemap.xml` and you're live.
 

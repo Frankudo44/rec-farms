@@ -49,6 +49,10 @@
       REC.env.PAYSTACK_PUBLIC_KEY ||
       "",
     paystackVerifyUrl: "/api/verify-payment",
+
+    // Server-created staff accounts (owner/administrator only). The function
+    // holds the service-role key; the browser only sends the session token.
+    staffCreateUrl: "/api/admin-create-staff",
   };
 
   REC.isSupabaseConfigured = function () {
@@ -7456,10 +7460,19 @@ UI.toast("Welcome back, " + (cur.profile.full_name || "Admin") + "!", "success")
         '<div class="admin-panel"><div class="ap-head"><div><h3>Staff</h3>' +
         '<span style="font-size:.8rem;color:var(--muted)">' +
         (canManage
-          ? "Activate, suspend or change roles. Only the current owner can grant the Owner role; administrators cannot be assigned Owner from here to keep the login guard enforced."
+          ? "Add, activate, suspend or change roles. Only the current owner can grant the Owner role; administrators cannot be assigned Owner from here to keep the login guard enforced."
           : "Read-only staff directory. Role changes and suspension are performed by an administrator.")
-        + "</span></div></div>" +
+        + "</span></div>" +
+        (canManage
+          ? '<button class="btn btn-sm btn-primary" id="staff_add"><svg aria-hidden="true" style="width:16px;height:16px"><use href="' + REC.sprite("i-plus") + '"></use></svg> Add Staff</button>'
+          : "") +
+        "</div>" +
         '<div class="ap-body" id="staff_list">' + ADMIN.skeleton(6) + "</div></div>";
+
+      if (canManage) {
+        const addBtn = document.getElementById("staff_add");
+        if (addBtn) addBtn.addEventListener("click", () => this.openAddForm());
+      }
 
       const { data, error } = await sb()
         .from("profiles")
@@ -7476,7 +7489,12 @@ UI.toast("Welcome back, " + (cur.profile.full_name || "Admin") + "!", "success")
       const host = document.getElementById("staff_list");
       const canManage = REC.auth.isAdmin();
       if (!this.state.rows.length) {
-        host.innerHTML = ADMIN.emptyState("No staff yet", "Promote accounts via the profile manager (e.g. update public.profiles set role='seller' ...).");
+        host.innerHTML = ADMIN.emptyState(
+          "No staff yet",
+          canManage
+            ? "Use the Add Staff button above to create an administrator, manager or seller account."
+            : "An administrator can add staff from here."
+        );
         return;
       }
       host.innerHTML =
@@ -7530,6 +7548,92 @@ UI.toast("Welcome back, " + (cur.profile.full_name || "Admin") + "!", "success")
           await this.init();
         })
       );
+    },
+
+    /* Create a brand-new staff account. The actual user is created by the
+       api/admin-create-staff.js serverless function (service-role); this form
+       only collects the details and sends the signed-in admin's session token. */
+    openAddForm() {
+      let modal = document.getElementById("staff_modal");
+      if (!modal) {
+        modal = document.createElement("div");
+        modal.className = "modal-root";
+        modal.id = "staff_modal";
+        document.body.appendChild(modal);
+      }
+      modal.innerHTML =
+        '<div class="modal-backdrop" data-close></div>' +
+        '<div class="modal-card" role="dialog" aria-modal="true">' +
+        '<button class="modal-close" data-close aria-label="Close"><svg><use href="' + REC.sprite("i-close") + '"></use></svg></button>' +
+        "<h3>Add Staff</h3>" +
+        '<p class="hint" style="margin-top:-.4rem">Creates a new login and grants the selected staff role. Share the temporary password privately; the person can change it later via “Forgot password”.</p>' +
+        '<div class="admin-grid-2">' +
+        '<div class="field full"><label for="sf_name">Full name *</label><input class="input" id="sf_name" autocomplete="off" placeholder="e.g. Aisha Bello"/></div>' +
+        '<div class="field"><label for="sf_email">Email *</label><input class="input" id="sf_email" type="email" autocomplete="off" placeholder="name@example.com"/></div>' +
+        '<div class="field"><label for="sf_phone">Phone</label><input class="input" id="sf_phone" autocomplete="off" placeholder="+234..."/></div>' +
+        '<div class="field"><label for="sf_role">Role *</label><select class="select" id="sf_role">' +
+        '<option value="administrator">Administrator</option>' +
+        '<option value="manager">Manager</option>' +
+        '<option value="seller">Seller</option>' +
+        "</select></div>" +
+        '<div class="field"><label for="sf_password">Temporary password *</label><input class="input" id="sf_password" type="text" autocomplete="off" placeholder="min. 8 characters"/></div>' +
+        "</div>" +
+        '<div class="form-actions">' +
+        '<button class="btn btn-primary" id="sf_save">Create Account</button>' +
+        '<button class="btn btn-outline" data-close>Cancel</button>' +
+        "</div></div>";
+
+      modal.classList.add("open");
+      modal.querySelectorAll("[data-close]").forEach((el) =>
+        el.addEventListener("click", () => modal.classList.remove("open"))
+      );
+      document.getElementById("sf_save").addEventListener("click", () => this.createStaff(modal));
+    },
+
+    async createStaff(modal) {
+      const get = (id) => document.getElementById(id);
+      const full_name = get("sf_name").value.trim();
+      const email = get("sf_email").value.trim();
+      const phone = get("sf_phone").value.trim();
+      const role = get("sf_role").value;
+      const password = get("sf_password").value;
+
+      if (!full_name) return ADMIN.toast("Full name is required", "error");
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return ADMIN.toast("Enter a valid email address", "error");
+      if (password.length < 8) return ADMIN.toast("Password must be at least 8 characters", "error");
+
+      const url = REC.config.staffCreateUrl;
+      if (!url) return ADMIN.toast("Staff creation is not configured", "error");
+
+      const btn = get("sf_save");
+      btn.disabled = true;
+      btn.textContent = "Creating…";
+
+      try {
+        const { data } = await sb().auth.getSession();
+        const token = data && data.session && data.session.access_token;
+        if (!token) throw new Error("Your session has expired. Please sign in again.");
+
+        const r = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer " + token,
+          },
+          body: JSON.stringify({ email, password, full_name, phone, role }),
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || !j || j.ok === false) {
+          throw new Error((j && j.error) || "Could not create the staff account.");
+        }
+        ADMIN.toast("Staff account created", "success");
+        modal.classList.remove("open");
+        await this.init();
+      } catch (e) {
+        ADMIN.toast(e.message || "Could not create the staff account", "error");
+        btn.disabled = false;
+        btn.textContent = "Create Account";
+      }
     },
   };
 
